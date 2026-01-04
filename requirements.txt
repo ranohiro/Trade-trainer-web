@@ -1,6 +1,6 @@
 streamlit
 plotly
 yfinance
-pandas==1.5.3
-numpy<2
+pandas
+numpy
 
