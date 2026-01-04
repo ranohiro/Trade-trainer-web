@@ -33,26 +33,18 @@ def calculate_indicators(df):
     df['MA25'] = df['Close'].rolling(window=25).mean()
     df['MA75'] = df['Close'].rolling(window=75).mean()
 
-    # Stochastics (K=14, D=3, SlowD=3) - Fast Stochastic
-    low_min = df['Low'].rolling(window=14).min()
-    high_max = df['High'].rolling(window=14).max()
+    # Stochastics (K=13, D=5, SlowD=4)
+    low_min = df['Low'].rolling(window=13).min()
+    high_max = df['High'].rolling(window=13).max()
     
     # Fast %K
     df['Stoch_K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
     
-    # Fast %D (which is often what people call %K in Slow Stochastic, but let's stick to standard)
-    # The user asked for %K, %D, Slow%D. Usually:
-    # Fast %K = (Close - Low14) / (High14 - Low14)
-    # Fast %D = SMA(Fast %K, 3)  <-- This is often called "K" in Slow Stoch
-    # Slow %D = SMA(Fast %D, 3)  <-- This is often called "D" in Slow Stoch
+    # %D (SMA of %K, window=5)
+    df['Stoch_D'] = df['Stoch_K'].rolling(window=5).mean()
     
-    # Let's align with common Japanese chart settings (Slow Stochastic is common):
-    # %K (Fast %D)
-    df['Stoch_K'] = df['Stoch_K'].rolling(window=3).mean() 
-    # %D (Slow %D)
-    df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
-    # Slow %D
-    df['Stoch_SlowD'] = df['Stoch_D'].rolling(window=3).mean()
+    # Slow %D (SMA of %D, window=4)
+    df['Stoch_SlowD'] = df['Stoch_D'].rolling(window=4).mean()
 
     return df
 

@@ -110,8 +110,8 @@ def main():
             else:
                 st.error("Failed to load data.")
 
-    def execute_trade(action, current_price, current_date):
-        qty = LOT_SIZE
+    def execute_trade(action, current_price, current_date, qty=100):
+        # qty is now passed as argument
         pnl = 0
         trade_type = ""
 
@@ -208,37 +208,60 @@ def main():
         st.rerun()
 
     def draw_candlestick(df, title, trade_history=None):
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                            vertical_spacing=0.03, subplot_titles=(title, 'Stochastics'),
-                            row_heights=[0.7, 0.3])
+        # Convert index to string to remove gaps (Category Axis)
+        df = df.copy()
+        df.index = df.index.strftime('%Y-%m-%d')
+        
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                            vertical_spacing=0.03, subplot_titles=(title, 'Volume', 'Stochastics'),
+                            row_heights=[0.5, 0.2, 0.3])
 
-        # Candlestick
+        # Candlestick (Row 1)
         fig.add_trace(go.Candlestick(x=df.index,
                     open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                    name='Price'), row=1, col=1)
+                    name='Price',
+                    increasing_line_color='red', increasing_fillcolor='red',
+                    decreasing_line_color='green', decreasing_fillcolor='green'), row=1, col=1)
 
-        # MAs
+        # MAs (Row 1)
         colors = {'MA5': 'orange', 'MA25': 'blue', 'MA75': 'green'}
         for ma, color in colors.items():
             if ma in df.columns:
                 fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1), name=ma), row=1, col=1)
 
-        # Trade Markers
+        # Volume (Row 2) - same color logic: Red if Up, Green if Down
+        # Up (Close >= Open) -> Red
+        # Down (Close < Open) -> Green
+        vol_colors = ['red' if c >= o else 'green' for c, o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=vol_colors), row=2, col=1)
+
+        # Trade Markers (Row 1)
         if trade_history:
             # Filter history for current view
-            start_date = df.index[0]
-            end_date = df.index[-1]
+            # Note: df.index is now string. We need comparable dates for filtering.
+            # But the trade_history has datetime objects.
+            # We must map trade dates to the string labels or x-indices.
+            # Simplest is to match by string representation.
+            
+            # Re-conversion for matching is needed since df.index is str now
+            # But filtering was done before based on range. 
+            # We can just match string dates to x-axis.
+            
+            valid_dates = set(df.index)
+            
+            visible_trades = []
+            for t in trade_history:
+                t_date_str = t['Date'].strftime('%Y-%m-%d')
+                if t_date_str in valid_dates:
+                    visible_trades.append({**t, 'DateStr': t_date_str})
 
-            # Helper to filter trades within the view window
-            visible_trades = [t for t in trade_history if start_date <= t['Date'] <= end_date]
-
-            buy_dates = [t['Date'] for t in visible_trades if t['Action'] == 'BUY']
+            buy_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'BUY']
             buy_prices = [t['Price'] for t in visible_trades if t['Action'] == 'BUY']
 
-            sell_dates = [t['Date'] for t in visible_trades if t['Action'] == 'SELL']
+            sell_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'SELL']
             sell_prices = [t['Price'] for t in visible_trades if t['Action'] == 'SELL']
 
-            close_dates = [t['Date'] for t in visible_trades if t['Action'] == 'CLOSE']
+            close_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'CLOSE']
             close_prices = [t['Price'] for t in visible_trades if t['Action'] == 'CLOSE']
 
             if buy_dates:
@@ -248,17 +271,34 @@ def main():
             if close_dates:
                 fig.add_trace(go.Scatter(x=close_dates, y=close_prices, mode='markers', marker=dict(symbol='x', size=8, color='black'), name='Close'), row=1, col=1)
 
-        # Stochastics
+        # Stochastics (Row 3)
         if 'Stoch_K' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='blue', width=1), name='%K'), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='blue', width=1), name='%K'), row=3, col=1)
         if 'Stoch_D' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='orange', width=1), name='%D'), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='orange', width=1), name='%D'), row=3, col=1)
         if 'Stoch_SlowD' in df.columns:
-            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_SlowD'], line=dict(color='green', width=1), name='Slow%D'), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_SlowD'], line=dict(color='green', width=1), name='Slow%D'), row=3, col=1)
 
-        fig.update_layout(xaxis_rangeslider_visible=False, height=600, margin=dict(l=0, r=0, t=30, b=0))
-        fig.update_yaxes(title_text="Price", row=1, col=1)
-        fig.update_yaxes(title_text="Stoch", range=[0, 100], row=2, col=1)
+        # Add stripes (background bands) every 5 days
+        # Since x-axis is category (strings), we can use integer indices - 0.5 to position rects
+        n_candles = len(df.index)
+        for i in range(0, n_candles, 10):
+            # i is the integer index of the start
+            x0 = i - 0.5
+            x1 = min(i + 5, n_candles) - 0.5
+            
+            fig.add_vrect(x0=x0, x1=x1, fillcolor="#333333", opacity=0.5, layer="below", line_width=0)
+
+        fig.update_layout(
+            xaxis_rangeslider_visible=False, 
+            height=700, 
+            margin=dict(l=0, r=0, t=30, b=0), 
+            template="plotly_dark",
+        )
+        fig.update_yaxes(title_text="Price", row=1, col=1, showgrid=True, gridcolor="#444444")
+        fig.update_yaxes(title_text="Volume", row=2, col=1, showgrid=True, gridcolor="#444444")
+        fig.update_yaxes(title_text="Stoch", range=[0, 100], row=3, col=1, showgrid=True, gridcolor="#444444")
+        fig.update_xaxes(showgrid=True, gridcolor="#444444", type='category', tickangle=90, dtick=5) # dtick 5 to match stripes roughly
         return fig
 
     # --- Main UI ---
@@ -324,78 +364,116 @@ def main():
         max_dd = calculate_max_drawdown(st.session_state.equity_history)
 
         m1, m2, m3, m4, m5 = st.columns(5)
-        m1.metric("Date", current_date.strftime('%Y-%m-%d'))
-        m2.metric("Equity", f"¥{equity_val:,.0f}")
-        m3.metric("Pos (Avg)", f"{st.session_state.position} (@{st.session_state.avg_price:,.0f})")
-        m4.metric("Unrealized P&L", f"¥{unrealized:,.0f}", delta_color="normal")
-        m5.metric("Win Rate / PF", f"{win_rate:.1%} / {pf:.2f}")
+        # Custom spacing and style to match "Ruin Simulator" look roughly
+        # We use st.markdown with HTML for better control over "Tabs" visual interference
+        
+        st.markdown(f"""
+        <div style="display: flex; flex-direction: row; justify-content: space-between; margin-bottom: 10px; padding: 10px 0; border-bottom: 1px solid #444;">
+            <div style="flex: 1;">
+                <div style="font-size: 12px; color: #aaa;">Date</div>
+                <div style="font-size: 20px; font-weight: bold;">{current_date.strftime('%Y-%m-%d')}</div>
+            </div>
+            <div style="flex: 1;">
+                <div style="font-size: 12px; color: #aaa;">Equity</div>
+                <div style="font-size: 20px; font-weight: bold;">¥{equity_val:,.0f}</div>
+            </div>
+            <div style="flex: 1;">
+                <div style="font-size: 12px; color: #aaa;">Pos (Avg)</div>
+                <div style="font-size: 20px; font-weight: bold;">{st.session_state.position} (@{st.session_state.avg_price:,.0f})</div>
+            </div>
+            <div style="flex: 1;">
+                <div style="font-size: 12px; color: #aaa;">Unrealized P&L</div>
+                <div style="font-size: 20px; font-weight: bold; color: {'#00ff00' if unrealized >= 0 else '#ff0000'};">¥{unrealized:,.0f}</div>
+            </div>
+            <div style="flex: 1;">
+                <div style="font-size: 12px; color: #aaa;">Win Rate / PF</div>
+                <div style="font-size: 20px; font-weight: bold;">{win_rate:.1%} / {pf:.2f}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-        # Tabs
-        t1, t2, t3, t4 = st.tabs(["Daily", "Weekly", "Index", "Review"])
+        # Main Layout: 2 Columns (Chart | Controls)
+        c_left, c_right = st.columns([3, 1])
 
-        with t1:
-            # Show last 100 days
-            display_df = df_slice.tail(100)
-            fig = draw_candlestick(display_df, f"Daily: {input_ticker}", st.session_state.trade_history)
-            st.plotly_chart(fig, use_container_width=True)
+        with c_left:
+            # Tabs
+            t1, t2, t3, t4 = st.tabs(["Daily", "Weekly", "Index", "Review"])
 
-        with t2:
-            if df_w_slice is not None:
-                # Show last 50 weeks
-                st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly"), use_container_width=True)
+            with t1:
+                # Show last 40 days
+                display_df = df_slice.tail(40)
+                fig = draw_candlestick(display_df, f"Daily: {input_ticker}", st.session_state.trade_history)
+                st.plotly_chart(fig, use_container_width=True)
 
-        with t3:
-            if df_i_slice is not None:
-                st.plotly_chart(draw_candlestick(df_i_slice.tail(100), f"Index: {INDEX_TICKER}"), use_container_width=True)
+            with t2:
+                if df_w_slice is not None:
+                    # Show last 50 weeks
+                    st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly"), use_container_width=True)
 
-        with t4:
-            st.subheader("Asset Transition")
-            if st.session_state.equity_history:
-                eq_df = pd.DataFrame(st.session_state.equity_history)
-                st.line_chart(eq_df.set_index('Date')['Equity'])
+            with t3:
+                if df_i_slice is not None:
+                    st.plotly_chart(draw_candlestick(df_i_slice.tail(40), f"Index: {input_index}"), use_container_width=True)
 
-            st.subheader("Statistics")
-            col_s1, col_s2 = st.columns(2)
-            with col_s1:
-                st.write(f"Total Trades: {len([t for t in st.session_state.trade_history if t.get('pnl',0)!=0])}")
-                st.write(f"Total Profit: ¥{t_profit:,.0f}")
-                st.write(f"Total Loss: ¥{t_loss:,.0f}")
-            with col_s2:
-                st.write(f"Avg Profit: ¥{avg_profit:,.0f}")
-                st.write(f"Avg Loss: ¥{avg_loss:,.0f}")
-                st.write(f"Max Drawdown: {max_dd:.2%}")
+            with t4:
+                st.subheader("Asset Transition")
+                if st.session_state.equity_history:
+                    eq_df = pd.DataFrame(st.session_state.equity_history)
+                    st.line_chart(eq_df.set_index('Date')['Equity'])
 
-        # Controls
-        st.divider()
-        c1, c2, c3, c4, c5 = st.columns(5)
+                st.subheader("Statistics")
+                col_s1, col_s2 = st.columns(2)
+                with col_s1:
+                    st.write(f"Total Trades: {len([t for t in st.session_state.trade_history if t.get('pnl',0)!=0])}")
+                    st.write(f"Total Profit: ¥{t_profit:,.0f}")
+                    st.write(f"Total Loss: ¥{t_loss:,.0f}")
+                with col_s2:
+                    st.write(f"Avg Profit: ¥{avg_profit:,.0f}")
+                    st.write(f"Avg Loss: ¥{avg_loss:,.0f}")
+                    st.write(f"Max Drawdown: {max_dd:.2%}")
 
-        # Navigation
-        if c1.button("Back (-1)"):
-            # Decrease step but don't go below minimum (usually 100)
-            new_step = max(100, st.session_state.current_step - 1)
-            st.session_state.current_step = new_step
-            st.rerun()
+        with c_right:
+            st.subheader("Actions")
+            
+            # Navigation
+            if st.button("Next Day (+1)", use_container_width=True):
+                st.session_state.current_step += 1
+                st.rerun()
 
-        if c2.button("Next Day (+1)"):
-            st.session_state.current_step += 1
-            st.rerun()
+            if st.button("Next Week (+5)", use_container_width=True):
+                st.session_state.current_step += 5
+                st.rerun()
 
-        if c2.button("Next Week (+5)"):
-            st.session_state.current_step += 5
-            st.rerun()
+            st.divider()
 
-        # Trading
-        # Disable buttons if at end
-        disabled = current_idx >= len(df_full) - 1
+            # Trade Entry
+            st.write("### Order")
+            trade_type = st.radio("Type", ["BUY", "SELL"])
+            quantity = st.number_input("Quantity", min_value=100, step=100, value=100)
+            
+            # Disable buttons if at end
+            disabled = current_idx >= len(df_full) - 1
 
-        if c3.button("BUY", disabled=disabled):
-            execute_trade("BUY", current_price, current_date)
+            if st.button("Place Order", use_container_width=True, disabled=disabled):
+                execute_trade(trade_type, current_price, current_date, quantity)
 
-        if c4.button("SELL", disabled=disabled):
-            execute_trade("SELL", current_price, current_date)
+            st.divider()
 
-        if c5.button("CLOSE", disabled=disabled):
-            execute_trade("CLOSE", current_price, current_date)
+            # Position Management
+            st.write("### Exit")
+            if st.session_state.position != 0:
+                if st.button("Close Position", use_container_width=True, disabled=disabled):
+                    # Close current position
+                    execute_trade("CLOSE", current_price, current_date)
+            else:
+                st.info("No Open Position") 
+
+            st.divider()
+            
+            # Back Button
+            if st.button("Back (-1)", use_container_width=True):
+                new_step = max(100, st.session_state.current_step - 1)
+                st.session_state.current_step = new_step
+                st.rerun()
 
     else:
         st.info("Welcome to Trade Training Studio. Configure settings in the sidebar and start.")
