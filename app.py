@@ -24,10 +24,12 @@ def main():
         if not history:
             return 0, 0, 0, 0, 0, 0
 
-        wins = [t['pnl'] for t in history if t.get('pnl', 0) > 0]
-        losses = [t['pnl'] for t in history if t.get('pnl', 0) < 0]
-
-        win_rate = len(wins) / len([t for t in history if t.get('pnl', 0) != 0]) if wins or losses else 0
+        wins = [t['PnL'] for t in history if t.get('PnL', 0) > 0]
+        losses = [t['PnL'] for t in history if t.get('PnL', 0) < 0]
+        
+        # Check against non-zero PnL for closed trades
+        closed_trades = [t for t in history if t.get('PnL', 0) != 0]
+        win_rate = len(wins) / len(closed_trades) if closed_trades else 0
         total_profit = sum(wins)
         total_loss = abs(sum(losses))
         profit_factor = total_profit / total_loss if total_loss > 0 else float('inf')
@@ -75,8 +77,10 @@ def main():
         st.session_state.df_weekly = None
     if 'df_index' not in st.session_state:
         st.session_state.df_index = None
+    if 'pos_start_date' not in st.session_state:
+        st.session_state.pos_start_date = None
 
-    def start_simulation(ticker, index_ticker, start_mode="Random"):
+    def start_simulation(ticker, index_ticker, start_mode="Random", initial_balance=INITIAL_BALANCE):
         with st.spinner("Loading Data..."):
             df = data_loader.fetch_data(ticker)
             if df is not None:
@@ -84,18 +88,17 @@ def main():
                 st.session_state.df_daily = df
                 st.session_state.df_weekly = data_loader.get_weekly_data(df)
 
-                st.session_state.df_weekly = data_loader.get_weekly_data(df)
-
                 df_idx = data_loader.fetch_data(index_ticker)
                 if df_idx is not None:
                     st.session_state.df_index = data_loader.calculate_indicators(df_idx)
 
                 st.session_state.simulation_started = True
-                st.session_state.balance = INITIAL_BALANCE
+                st.session_state.balance = initial_balance
                 st.session_state.position = 0
                 st.session_state.avg_price = 0.0
                 st.session_state.trade_history = []
                 st.session_state.equity_history = []
+                st.session_state.pos_start_date = None
 
                 if start_mode == "Random":
                     # Ensure we have enough history for indicators (75 days + buffer)
@@ -105,105 +108,155 @@ def main():
                         st.session_state.current_step = random.randint(min_idx, max_idx)
                     else:
                         st.session_state.current_step = min_idx
+
+                elif start_mode == "Latest":
+                    st.session_state.current_step = len(df) - 1
                 else:
                     st.session_state.current_step = 100
             else:
                 st.error("Failed to load data.")
 
-    def execute_trade(action, current_price, current_date, qty=100):
-        # qty is now passed as argument
+    def execute_trade(action, current_price, current_date, ticker, qty_param=100):
+        # qty_param is the quantity requested by the user for the action
         pnl = 0
         trade_type = ""
+        actual_qty_transacted = 0 # To record in history
+        
+        # Store initial position and avg_price for PnL calculation if position flips
+        initial_position = st.session_state.position
+        initial_avg_price = st.session_state.avg_price
 
         if action == "BUY":
-            # Buying logic
+            remaining_qty_to_buy = qty_param
+
             # 1. Covering Short
             if st.session_state.position < 0:
-                cover_qty = min(qty, abs(st.session_state.position))
-                # PnL = (Entry - Exit) * Qty
+                cover_qty = min(remaining_qty_to_buy, abs(st.session_state.position))
                 pnl += (st.session_state.avg_price - current_price) * cover_qty
+                st.session_state.balance -= (current_price * cover_qty) # Cash out for cover
                 st.session_state.position += cover_qty
-                # Balance update: PnL is realized, Margin/Cash handles itself?
-                # Let's use simplified Cash Model:
-                # Short Entry: Cash + Proceeds.
-                # Short Exit: Cash - Cost.
-                st.session_state.balance -= (current_price * cover_qty)
+                remaining_qty_to_buy -= cover_qty
+                actual_qty_transacted = cover_qty # For this part of the trade
+                trade_type = "Buy (Cover)"
 
                 if st.session_state.position == 0:
                     st.session_state.avg_price = 0
-
-                qty -= cover_qty # Remaining to buy (flip to long)
-                trade_type = "Buy (Cover)"
+                    # If position is fully closed, reset pos_start_date
+                    st.session_state.pos_start_date = None
 
             # 2. Opening/Adding Long
-            if qty > 0:
-                cost = current_price * qty
-                if st.session_state.balance >= cost: # Basic check
-                    old_val = st.session_state.position * st.session_state.avg_price
-                    st.session_state.balance -= cost
-                    st.session_state.position += qty
-                    st.session_state.avg_price = (old_val + cost) / st.session_state.position
-                    trade_type = "Buy (Long)" if trade_type == "" else "Buy (Flip)"
-                else:
-                    st.error("Insufficient Funds to Open Long")
-                    return
+            if remaining_qty_to_buy > 0:
+                cost = current_price * remaining_qty_to_buy
+                
+                unrealized = (current_price - st.session_state.avg_price) * st.session_state.position if st.session_state.position != 0 else 0
+                equity = st.session_state.balance + unrealized
+                
+                new_pos_size = abs(st.session_state.position + remaining_qty_to_buy)
+                new_pos_value = new_pos_size * current_price
+                
+                if new_pos_value > equity * 3:
+                     st.error(f"Order Rejected: Exceeds 3x Leverage Limit. Max: ¥{equity*3:,.0f}, Requested: ¥{new_pos_value:,.0f}")
+                     return
+
+                old_val = st.session_state.position * st.session_state.avg_price
+                st.session_state.balance -= cost
+                st.session_state.position += remaining_qty_to_buy
+                st.session_state.avg_price = (old_val + cost) / st.session_state.position
+                
+                actual_qty_transacted = remaining_qty_to_buy # For this part of the trade
+                trade_type = "Buy (Long)" if trade_type == "" else "Buy (Flip)"
 
         elif action == "SELL":
-            # Selling logic
+            remaining_qty_to_sell = qty_param
+
             # 1. Closing Long
             if st.session_state.position > 0:
-                close_qty = min(qty, st.session_state.position)
-                # PnL = (Exit - Entry) * Qty
+                close_qty = min(remaining_qty_to_sell, st.session_state.position)
                 pnl += (current_price - st.session_state.avg_price) * close_qty
                 st.session_state.balance += (current_price * close_qty)
                 st.session_state.position -= close_qty
+                remaining_qty_to_sell -= close_qty
+                actual_qty_transacted = close_qty # For this part of the trade
+                trade_type = "Sell (Close)"
 
                 if st.session_state.position == 0:
                     st.session_state.avg_price = 0
-
-                qty -= close_qty
-                trade_type = "Sell (Close)"
+                    # If position is fully closed, reset pos_start_date
+                    st.session_state.pos_start_date = None
 
             # 2. Opening/Adding Short
-            if qty > 0:
-                # Short proceeds add to cash (simplified)
-                proceeds = current_price * qty
-                st.session_state.balance += proceeds
+            if remaining_qty_to_sell > 0:
+                unrealized = (current_price - st.session_state.avg_price) * st.session_state.position if st.session_state.position != 0 else 0
+                equity = st.session_state.balance + unrealized
+                
+                new_pos_size = abs(st.session_state.position - remaining_qty_to_sell)
+                new_pos_value = new_pos_size * current_price
+                
+                if new_pos_value > equity * 3:
+                     st.error(f"Order Rejected: Exceeds 3x Leverage Limit. Max: ¥{equity*3:,.0f}, Requested: ¥{new_pos_value:,.0f}")
+                     return
 
-                # Weighted Avg for Short
+                cost = current_price * remaining_qty_to_sell
+                
                 old_val = abs(st.session_state.position) * st.session_state.avg_price
-                st.session_state.position -= qty
-                st.session_state.avg_price = (old_val + proceeds) / abs(st.session_state.position)
+                st.session_state.balance += cost
+                
+                if st.session_state.position < 0: # Already short
+                     st.session_state.avg_price = (old_val + cost) / (abs(st.session_state.position) + remaining_qty_to_sell)
+                else: # First short position
+                    st.session_state.avg_price = current_price
+
+                st.session_state.position -= remaining_qty_to_sell
+                actual_qty_transacted = remaining_qty_to_sell # For this part of the trade
                 trade_type = "Sell (Short)" if trade_type == "" else "Sell (Flip)"
 
         elif action == "CLOSE":
             if st.session_state.position == 0:
-                return
+                return # Nothing to close
+
+            qty_to_close = abs(st.session_state.position)
+            actual_qty_transacted = qty_to_close
 
             if st.session_state.position > 0:
                 # Close Long
-                qty = st.session_state.position
-                pnl = (current_price - st.session_state.avg_price) * qty
-                st.session_state.balance += (current_price * qty)
-                trade_type = "Close (Long)"
+                pnl = (current_price - st.session_state.avg_price) * qty_to_close
+                st.session_state.balance += (current_price * qty_to_close)
+                trade_type = "Sell (Close)"
             else:
                 # Close Short
-                qty = abs(st.session_state.position)
-                pnl = (st.session_state.avg_price - current_price) * qty
-                st.session_state.balance -= (current_price * qty)
-                trade_type = "Close (Short)"
+                pnl = (st.session_state.avg_price - current_price) * qty_to_close
+                st.session_state.balance -= (current_price * qty_to_close)
+                trade_type = "Buy (Close)"
 
             st.session_state.position = 0
             st.session_state.avg_price = 0
+            # If position is fully closed, reset pos_start_date
+            st.session_state.pos_start_date = None
+        
+        # Calculate Holding Period
+        holding_days = "" # Default to empty string if not applicable
 
+        # If position was closed (pnl != 0 implies a closing component)
+        # Or if the trade type explicitly indicates a close/cover
+        if pnl != 0 or "Close" in trade_type or "Cover" in trade_type:
+            if st.session_state.pos_start_date is not None:
+                holding_days = (current_date - st.session_state.pos_start_date).days
+        
+        # Update pos_start_date if a new position is opened or an existing one is modified
+        if st.session_state.position != 0 and st.session_state.pos_start_date is None:
+            st.session_state.pos_start_date = current_date
+        
         # Record History
         st.session_state.trade_history.append({
             'Step': st.session_state.current_step,
             'Date': current_date,
-            'Action': action,
-            'Type': trade_type,
+            'Ticker': ticker,
+            'Action': action, # Original action (BUY/SELL/CLOSE)
+            'Type': trade_type, # Derived type (Buy (Cover), Sell (Long), etc.)
             'Price': current_price,
-            'PnL': pnl
+            'Qty': actual_qty_transacted, # Actual quantity involved in the final trade type
+            'PnL': pnl,
+            'Days': holding_days
         })
         st.rerun()
 
@@ -238,22 +291,49 @@ def main():
         # Trade Markers (Row 1)
         if trade_history:
             # Filter history for current view
-            # Note: df.index is now string. We need comparable dates for filtering.
-            # But the trade_history has datetime objects.
-            # We must map trade dates to the string labels or x-indices.
-            # Simplest is to match by string representation.
+            # Use original datetime index for robust matching (Daily & Weekly)
+            # df.index passed to this function is likely DatetimeIndex (before str conversion above)
+            # Wait, line 265 converted it: df.index = df.index.strftime...
+            # We need the original datetime index.
+            # df was copied at line 264. But we need access to the original index values.
+            # We can re-parse, or better:
+            # Access the original df passed in? No, we modified local 'df'.
+            # Let's assume we can convert strings back or just rely on the strings being ISO?
+            # No, 'bfill' needs math.
+            # Let's convert back for matching.
+            dt_index = pd.to_datetime(df.index)
             
-            # Re-conversion for matching is needed since df.index is str now
-            # But filtering was done before based on range. 
-            # We can just match string dates to x-axis.
-            
-            valid_dates = set(df.index)
+            # Helper to find location
+            # Note: dt_index is monotonic increasing.
             
             visible_trades = []
             for t in trade_history:
-                t_date_str = t['Date'].strftime('%Y-%m-%d')
-                if t_date_str in valid_dates:
-                    visible_trades.append({**t, 'DateStr': t_date_str})
+                t_date = t['Date']
+                
+                # Fast check bounds
+                if t_date > dt_index[-1]:
+                    continue
+                
+                # Find nearest candle forward (containing the trade)
+                # get_indexer returns -1 if out of bounds (but we handled right bound)
+                # For left bound (trade older than first candle):
+                # bfill will return index 0. We must check distance.
+                
+                try:
+                    idx = dt_index.get_indexer([t_date], method='bfill')[0]
+                except:
+                    idx = -1
+                    
+                if idx != -1:
+                    matched_date = dt_index[idx]
+                    
+                    # Check if match is reasonable (e.g. within 7 days for Weekly, 1 day for Daily)
+                    # Daily gap might be larger due to holidays (e.g. 5 days).
+                    # Weekly gap max 7 days.
+                    # Let's say if diff > 10 days, it's definitely an old trade mapping to first candle.
+                    if (matched_date - t_date).days <= 10:
+                        date_str = matched_date.strftime('%Y-%m-%d')
+                        visible_trades.append({**t, 'DateStr': date_str})
 
             buy_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'BUY']
             buy_prices = [t['Price'] for t in visible_trades if t['Action'] == 'BUY']
@@ -265,11 +345,11 @@ def main():
             close_prices = [t['Price'] for t in visible_trades if t['Action'] == 'CLOSE']
 
             if buy_dates:
-                fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode='markers', marker=dict(symbol='triangle-up', size=10, color='red'), name='Buy'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode='markers', marker=dict(symbol='triangle-up', size=12, color='blue', line=dict(width=1, color='black')), name='Buy'), row=1, col=1)
             if sell_dates:
-                fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode='markers', marker=dict(symbol='triangle-down', size=10, color='blue'), name='Sell'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode='markers', marker=dict(symbol='triangle-down', size=12, color='blue', line=dict(width=1, color='white')), name='Sell'), row=1, col=1)
             if close_dates:
-                fig.add_trace(go.Scatter(x=close_dates, y=close_prices, mode='markers', marker=dict(symbol='x', size=8, color='black'), name='Close'), row=1, col=1)
+                fig.add_trace(go.Scatter(x=close_dates, y=close_prices, mode='markers', marker=dict(symbol='x', size=8, color='gold', line=dict(width=1, color='black')), name='Close'), row=1, col=1)
 
         # Stochastics (Row 3)
         if 'Stoch_K' in df.columns:
@@ -307,11 +387,28 @@ def main():
     st.sidebar.title("Configuration")
     input_ticker = st.sidebar.text_input("Ticker", DEFAULT_TICKER)
     input_index = st.sidebar.selectbox("Index Ticker", ["^N225", "^TOPX", "^MOTHERS"], index=0)
-    start_mode = st.sidebar.radio("Start Mode", ["Random", "Specific Date (Beginning)"])
-
+    start_mode_sel = st.sidebar.radio("Start Mode", ["Random", "Latest"])
+    
+    # Use text_input to allow comma formatting, parse manually
+    initial_balance_str = st.sidebar.text_input("Initial Balance", value=f"{INITIAL_BALANCE:,}")
+    try:
+        initial_balance_in = int(initial_balance_str.replace(",", ""))
+    except ValueError:
+        st.sidebar.error("Invalid balance format. Using default.")
+        initial_balance_in = INITIAL_BALANCE
+    
+    # Trade Goal
+    trade_goal = st.sidebar.slider("Trade Goal (Count)", 5, 50, 10)
+            
     if st.sidebar.button("Start / Restart"):
-        start_simulation(input_ticker, input_index, start_mode)
-
+        # Map selection to mode string
+        if "Random" in start_mode_sel:
+            mode = "Random"
+        else:
+            mode = "Latest"
+        
+        start_simulation(input_ticker, input_index, mode, initial_balance_in)
+        st.rerun()
     # Stats Panel in Sidebar
     if st.session_state.simulation_started:
         st.sidebar.divider()
@@ -319,9 +416,15 @@ def main():
         if st.session_state.trade_history:
             log_df = pd.DataFrame(st.session_state.trade_history)
             # Format for display
-            display_log = log_df[['Date', 'Type', 'Price', 'PnL']].copy()
+            # Ensure cols exist
+            if 'Qty' not in log_df.columns: log_df['Qty'] = 0
+            if 'Days' not in log_df.columns: log_df['Days'] = ""
+            if 'Ticker' not in log_df.columns: log_df['Ticker'] = ""
+            
+            display_log = log_df[['Date', 'Ticker', 'Type', 'Price', 'Qty', 'PnL', 'Days']].copy()
             display_log['Date'] = display_log['Date'].dt.strftime('%Y-%m-%d')
             display_log['Price'] = display_log['Price'].apply(lambda x: f"{x:,.0f}")
+            display_log['Qty'] = display_log['Qty'].apply(lambda x: f"{x:,.0f}")
             display_log['PnL'] = display_log['PnL'].apply(lambda x: f"{x:,.0f}")
             st.sidebar.dataframe(display_log, height=300)
 
@@ -400,19 +503,19 @@ def main():
             t1, t2, t3, t4 = st.tabs(["Daily", "Weekly", "Index", "Review"])
 
             with t1:
-                # Show last 40 days
-                display_df = df_slice.tail(40)
+                # Show last 30 days
+                display_df = df_slice.tail(30)
                 fig = draw_candlestick(display_df, f"Daily: {input_ticker}", st.session_state.trade_history)
                 st.plotly_chart(fig, use_container_width=True)
 
             with t2:
                 if df_w_slice is not None:
                     # Show last 50 weeks
-                    st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly"), use_container_width=True)
+                    st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly", st.session_state.trade_history), use_container_width=True)
 
             with t3:
                 if df_i_slice is not None:
-                    st.plotly_chart(draw_candlestick(df_i_slice.tail(40), f"Index: {input_index}"), use_container_width=True)
+                    st.plotly_chart(draw_candlestick(df_i_slice.tail(30), f"Index: {input_index}"), use_container_width=True)
 
             with t4:
                 st.subheader("Asset Transition")
@@ -423,7 +526,7 @@ def main():
                 st.subheader("Statistics")
                 col_s1, col_s2 = st.columns(2)
                 with col_s1:
-                    st.write(f"Total Trades: {len([t for t in st.session_state.trade_history if t.get('pnl',0)!=0])}")
+                    st.write(f"Total Trades: {len([t for t in st.session_state.trade_history if t.get('PnL',0)!=0])}")
                     st.write(f"Total Profit: ¥{t_profit:,.0f}")
                     st.write(f"Total Loss: ¥{t_loss:,.0f}")
                 with col_s2:
@@ -435,13 +538,33 @@ def main():
             st.subheader("Actions")
             
             # Navigation
-            if st.button("Next Day (+1)", use_container_width=True):
-                st.session_state.current_step += 1
+            # Disable Next buttons if at end of data
+            df_len = len(df_slice) if df_slice is not None else 0 # this is slice, wait. We need total df len.
+            # st.session_state.df_daily is the source.
+            total_len = len(st.session_state.df_daily) if st.session_state.df_daily is not None else 0
+            is_at_end = st.session_state.current_step >= total_len - 1
+            
+            if st.button("Next Day (+1)", use_container_width=True, disabled=is_at_end):
+                st.session_state.current_step = min(st.session_state.current_step + 1, total_len - 1)
                 st.rerun()
 
-            if st.button("Next Week (+5)", use_container_width=True):
-                st.session_state.current_step += 5
+            if st.button("Next Week (+5)", use_container_width=True, disabled=is_at_end):
+                st.session_state.current_step = min(st.session_state.current_step + 5, total_len - 1)
                 st.rerun()
+
+            # Check Goal
+            trades_count = len([t for t in st.session_state.trade_history if t.get('PnL', 0) != 0])
+            if trades_count >= trade_goal:
+                st.success(f"Goal Reached! You have completed {trades_count} trades.")
+                
+                # Convert log to CSV for download
+                csv = pd.DataFrame(st.session_state.trade_history).to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download Trade Results (CSV)",
+                    data=csv,
+                    file_name='trade_results.csv',
+                    mime='text/csv',
+                )
 
             st.divider()
 
@@ -450,11 +573,13 @@ def main():
             trade_type = st.radio("Type", ["BUY", "SELL"])
             quantity = st.number_input("Quantity", min_value=100, step=100, value=100)
             
-            # Disable buttons if at end
+            # Disable buttons if at end or goal reached? 
+            # User said "Result can be saved", implies stopping or at least pausing.
+            # Let's keep it active but warn/celebrate.
             disabled = current_idx >= len(df_full) - 1
-
+            
             if st.button("Place Order", use_container_width=True, disabled=disabled):
-                execute_trade(trade_type, current_price, current_date, quantity)
+                execute_trade(trade_type, current_price, current_date, input_ticker, quantity)
 
             st.divider()
 
@@ -463,10 +588,10 @@ def main():
             if st.session_state.position != 0:
                 if st.button("Close Position", use_container_width=True, disabled=disabled):
                     # Close current position
-                    execute_trade("CLOSE", current_price, current_date)
+                    execute_trade("CLOSE", current_price, current_date, input_ticker)
             else:
                 st.info("No Open Position") 
-
+            
             st.divider()
             
             # Back Button
