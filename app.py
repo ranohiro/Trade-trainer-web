@@ -16,8 +16,12 @@ def main():
     DEFAULT_TICKER = "7203.T"
     DEFAULT_TICKER = "7203.T"
     # INDEX_TICKER removed, will be selected by user
-    LOT_SIZE = 100
-    LOT_SIZE = 100
+    # Authorization Config
+    USERS = {
+        "user1": {"pw": "pass1", "level": 1},
+        "user2": {"pw": "pass2", "level": 2},
+        "dev":   {"pw": "devpass", "level": 3}
+    }
 
     # Helper Functions
     def calculate_metrics(history):
@@ -79,6 +83,29 @@ def main():
         st.session_state.df_index = None
     if 'pos_start_date' not in st.session_state:
         st.session_state.pos_start_date = None
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+        st.session_state.user_level = 0
+        st.session_state.username = ""
+
+    def login():
+        st.title("Login")
+        with st.form("login_form"):
+            user = st.text_input("Username")
+            pw = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login")
+            if submitted:
+                if user in USERS and USERS[user]["pw"] == pw:
+                    st.session_state.authenticated = True
+                    st.session_state.user_level = USERS[user]["level"]
+                    st.session_state.username = user
+                    st.rerun()
+                else:
+                    st.error("Invalid credentials")
+
+    if not st.session_state.authenticated:
+        login()
+        return
 
     def start_simulation(ticker, index_ticker, start_mode="Random", initial_balance=INITIAL_BALANCE):
         with st.spinner("Loading Data..."):
@@ -385,7 +412,17 @@ def main():
 
     # Sidebar
     st.sidebar.title("Configuration")
-    input_ticker = st.sidebar.text_input("Ticker", DEFAULT_TICKER)
+    st.sidebar.write(f"User: {st.session_state.username} (Level {st.session_state.user_level})")
+    
+    if st.sidebar.button("Logout"):
+        st.session_state.authenticated = False
+        st.rerun()
+
+    if st.session_state.user_level == 1:
+        input_ticker = "7203.T"
+        st.sidebar.text_input("Ticker", value=input_ticker, disabled=True)
+    else:
+        input_ticker = st.sidebar.text_input("Ticker", DEFAULT_TICKER)
     input_index = st.sidebar.selectbox("Index Ticker", ["^N225", "^TOPX", "^MOTHERS"], index=0)
     start_mode_sel = st.sidebar.radio("Start Mode", ["Random", "Latest"])
     
@@ -499,25 +536,39 @@ def main():
         c_left, c_right = st.columns([3, 1])
 
         with c_left:
-            # Tabs
-            t1, t2, t3, t4 = st.tabs(["Daily", "Weekly", "Index", "Review"])
-
-            with t1:
+            # Tabs Logic for RBAC
+            if st.session_state.user_level == 1:
+                tab_names = ["Daily", "Review"]
+            else:
+                tab_names = ["Daily", "Weekly", "Index", "Review"]
+            
+            tabs = st.tabs(tab_names)
+            
+            # Map content to tabs based on name
+            # Daily (Always present)
+            with tabs[0]: # Daily
                 # Show last 30 days
                 display_df = df_slice.tail(30)
                 fig = draw_candlestick(display_df, f"Daily: {input_ticker}", st.session_state.trade_history)
                 st.plotly_chart(fig, use_container_width=True)
 
-            with t2:
-                if df_w_slice is not None:
-                    # Show last 50 weeks
-                    st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly", st.session_state.trade_history), use_container_width=True)
+            # Weekly (Level 2+)
+            if "Weekly" in tab_names:
+                idx = tab_names.index("Weekly")
+                with tabs[idx]:
+                    if df_w_slice is not None:
+                        # Show last 50 weeks
+                        st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly", st.session_state.trade_history), use_container_width=True)
 
-            with t3:
-                if df_i_slice is not None:
-                    st.plotly_chart(draw_candlestick(df_i_slice.tail(30), f"Index: {input_index}"), use_container_width=True)
+            # Index (Level 2+)
+            if "Index" in tab_names:
+                idx = tab_names.index("Index")
+                with tabs[idx]:
+                    if df_i_slice is not None:
+                        st.plotly_chart(draw_candlestick(df_i_slice.tail(30), f"Index: {input_index}"), use_container_width=True)
 
-            with t4:
+            # Review (Always present)
+            with tabs[-1]: # Review is always last
                 st.subheader("Asset Transition")
                 if st.session_state.equity_history:
                     eq_df = pd.DataFrame(st.session_state.equity_history)
@@ -594,11 +645,12 @@ def main():
             
             st.divider()
             
-            # Back Button
-            if st.button("Back (-1)", use_container_width=True):
-                new_step = max(100, st.session_state.current_step - 1)
-                st.session_state.current_step = new_step
-                st.rerun()
+            # Back Button - RBAC Level 3 Only
+            if st.session_state.user_level >= 3:
+                if st.button("Back (-1)", use_container_width=True):
+                    new_step = max(100, st.session_state.current_step - 1)
+                    st.session_state.current_step = new_step
+                    st.rerun()
 
     else:
         st.info("Welcome to Trade Training Studio. Configure settings in the sidebar and start.")
