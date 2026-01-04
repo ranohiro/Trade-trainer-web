@@ -1,6 +1,5 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
 
 def fetch_data(ticker, period="10y", interval="1d"):
     """
@@ -22,7 +21,7 @@ def fetch_data(ticker, period="10y", interval="1d"):
 
 def calculate_indicators(df):
     """
-    Calculates Moving Averages and Stochastics.
+    Calculates Moving Averages and Stochastics using pandas.
     """
     if df is None or df.empty:
         return df
@@ -30,26 +29,30 @@ def calculate_indicators(df):
     df = df.copy()
 
     # Moving Averages (5, 25, 75)
-    df['MA5'] = ta.sma(df['Close'], length=5)
-    df['MA25'] = ta.sma(df['Close'], length=25)
-    df['MA75'] = ta.sma(df['Close'], length=75)
+    df['MA5'] = df['Close'].rolling(window=5).mean()
+    df['MA25'] = df['Close'].rolling(window=25).mean()
+    df['MA75'] = df['Close'].rolling(window=75).mean()
 
-    # Stochastics (K=14, D=3, Smooth=3)
-    stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3, smooth_k=3)
-
-    if stoch is not None:
-        df = pd.concat([df, stoch], axis=1)
-
-        # Identify columns
-        # pandas_ta returns like STOCHk_14_3_3, STOCHd_14_3_3
-        k_col = [c for c in stoch.columns if c.startswith('STOCHk')][0]
-        d_col = [c for c in stoch.columns if c.startswith('STOCHd')][0]
-
-        df['Stoch_K'] = df[k_col]
-        df['Stoch_D'] = df[d_col]
-
-        # Calculate Slow%D (SMA of %D)
-        df['Stoch_SlowD'] = ta.sma(df['Stoch_D'], length=3)
+    # Stochastics (K=14, D=3, SlowD=3) - Fast Stochastic
+    low_min = df['Low'].rolling(window=14).min()
+    high_max = df['High'].rolling(window=14).max()
+    
+    # Fast %K
+    df['Stoch_K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+    
+    # Fast %D (which is often what people call %K in Slow Stochastic, but let's stick to standard)
+    # The user asked for %K, %D, Slow%D. Usually:
+    # Fast %K = (Close - Low14) / (High14 - Low14)
+    # Fast %D = SMA(Fast %K, 3)  <-- This is often called "K" in Slow Stoch
+    # Slow %D = SMA(Fast %D, 3)  <-- This is often called "D" in Slow Stoch
+    
+    # Let's align with common Japanese chart settings (Slow Stochastic is common):
+    # %K (Fast %D)
+    df['Stoch_K'] = df['Stoch_K'].rolling(window=3).mean() 
+    # %D (Slow %D)
+    df['Stoch_D'] = df['Stoch_K'].rolling(window=3).mean()
+    # Slow %D
+    df['Stoch_SlowD'] = df['Stoch_D'].rolling(window=3).mean()
 
     return df
 
@@ -73,8 +76,8 @@ def get_weekly_data(df):
     w_df = w_df.dropna()
 
     # Weekly MAs (5, 25, 75 weeks)
-    w_df['MA5'] = ta.sma(w_df['Close'], length=5)
-    w_df['MA25'] = ta.sma(w_df['Close'], length=25)
-    w_df['MA75'] = ta.sma(w_df['Close'], length=75)
+    w_df['MA5'] = w_df['Close'].rolling(window=5).mean()
+    w_df['MA25'] = w_df['Close'].rolling(window=25).mean()
+    w_df['MA75'] = w_df['Close'].rolling(window=75).mean()
 
     return w_df

@@ -14,7 +14,9 @@ def main():
     # Constants
     INITIAL_BALANCE = 10000000 # 10 Million Yen for flexibility
     DEFAULT_TICKER = "7203.T"
-    INDEX_TICKER = "^N225"
+    DEFAULT_TICKER = "7203.T"
+    # INDEX_TICKER removed, will be selected by user
+    LOT_SIZE = 100
     LOT_SIZE = 100
 
     # Helper Functions
@@ -74,7 +76,7 @@ def main():
     if 'df_index' not in st.session_state:
         st.session_state.df_index = None
 
-    def start_simulation(ticker, start_mode="Random"):
+    def start_simulation(ticker, index_ticker, start_mode="Random"):
         with st.spinner("Loading Data..."):
             df = data_loader.fetch_data(ticker)
             if df is not None:
@@ -82,7 +84,9 @@ def main():
                 st.session_state.df_daily = df
                 st.session_state.df_weekly = data_loader.get_weekly_data(df)
 
-                df_idx = data_loader.fetch_data(INDEX_TICKER)
+                st.session_state.df_weekly = data_loader.get_weekly_data(df)
+
+                df_idx = data_loader.fetch_data(index_ticker)
                 if df_idx is not None:
                     st.session_state.df_index = data_loader.calculate_indicators(df_idx)
 
@@ -262,10 +266,11 @@ def main():
     # Sidebar
     st.sidebar.title("Configuration")
     input_ticker = st.sidebar.text_input("Ticker", DEFAULT_TICKER)
+    input_index = st.sidebar.selectbox("Index Ticker", ["^N225", "^TOPX", "^MOTHERS"], index=0)
     start_mode = st.sidebar.radio("Start Mode", ["Random", "Specific Date (Beginning)"])
 
     if st.sidebar.button("Start / Restart"):
-        start_simulation(input_ticker, start_mode)
+        start_simulation(input_ticker, input_index, start_mode)
 
     # Stats Panel in Sidebar
     if st.session_state.simulation_started:
@@ -365,7 +370,13 @@ def main():
         c1, c2, c3, c4, c5 = st.columns(5)
 
         # Navigation
-        if c1.button("Next Day (+1)"):
+        if c1.button("Back (-1)"):
+            # Decrease step but don't go below minimum (usually 100)
+            new_step = max(100, st.session_state.current_step - 1)
+            st.session_state.current_step = new_step
+            st.rerun()
+
+        if c2.button("Next Day (+1)"):
             st.session_state.current_step += 1
             st.rerun()
 

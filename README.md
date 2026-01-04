@@ -1,42 +1,42 @@
 # Trade Training Studio
 
-A practice-focused investment simulator built with Python and Streamlit.
+PythonとStreamlitで構築された実践的な投資シミュレーターです。
 
-## Overview
+## 概要
 
-This application allows you to practice technical trading using historical stock data. It features:
--   **Candlestick Charts**: Daily, Weekly, and Index charts.
--   **Indicators**: Moving Averages (5, 25, 75) and Stochastics (%K, %D, Slow%D).
--   **Simulation**: Step through data day-by-day, hiding future price movements.
--   **Trading**: Buy, Sell, and Close positions to practice entries and exits.
--   **Review**: Track your equity curve and trade statistics (Win Rate, Profit Factor).
+このアプリケーションでは、過去の株価データを使用してテクニカルトレードの練習ができます。以下の機能を備えています：
+-   **ローソク足チャート**: 日足、週足、および指数チャート。
+-   **テクニカル指標**: 移動平均線 (5, 25, 75日) およびストキャスティクス (%K, %D, Slow%D)。
+-   **シミュレーション**: 価格変動を1日ずつ送りながら、将来の動きを隠して練習できます。
+-   **トレード**: 買い (Buy)、売り (Sell)、決済 (Close) の操作を行い、エントリーとエグジットの練習が可能です。
+-   **レビュー**: 資産曲線やトレード統計（勝率、プロフィットファクター）を確認できます。
 
-## Installation
+## インストール方法
 
-1.  Clone the repository.
-2.  Install the required dependencies:
+1.  リポジトリをクローンします。
+2.  必要な依存関係をインストールします：
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+## 使い方
 
-Run the Streamlit application:
+Streamlitアプリケーションを実行します：
 
 ```bash
 streamlit run app.py
 ```
 
-1.  **Sidebar**: Enter a Ticker Symbol (e.g., `7203.T` for Toyota) and choose a Start Mode (Random or Beginning).
-2.  **Start**: Click "Start / Restart".
-3.  **Trade**:
-    -   Use **Next Day** to advance the chart.
-    -   Use **BUY** / **SELL** to enter positions (100 shares).
-    -   Use **CLOSE** to exit positions.
-4.  **Review**: Check the "Review" tab for your asset curve and statistics.
+1.  **サイドバー**: 銘柄コード（例: トヨタの場合は `7203.T`）を入力し、開始モード（ランダムまたは最初から）を選択します。
+2.  **開始**: 「Start / Restart」をクリックします。
+3.  **トレード**:
+    -   **Next Day** でチャートを1日進めます。
+    -   **BUY** / **SELL** でポジションを持ちます（100株単位）。
+    -   **CLOSE** でポジションを決済します。
+4.  **レビュー**: 「Review」タブで資産推移や統計を確認します。
 
-## Tech Stack
+## 技術スタック
 
 -   Python 3.9+
 -   Streamlit
