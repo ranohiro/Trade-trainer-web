@@ -1,10 +1,12 @@
 import streamlit as st
+import datetime
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
 import random
 import sys
+import extra_streamlit_components as stx
 import data_loader
 
 def main():
@@ -17,11 +19,14 @@ def main():
     DEFAULT_TICKER = "7203.T"
     # INDEX_TICKER removed, will be selected by user
     # Authorization Config
-    USERS = {
-        "user1": {"pw": "pass1", "level": 1},
-        "user2": {"pw": "pass2", "level": 2},
-        "dev":   {"pw": "devpass", "level": 3}
-    }
+    # Load users from st.secrets if available, else empty (or fallback to local dev secrets)
+    try:
+        USERS = st.secrets["users"]
+    except Exception:
+        USERS = {}
+        # Warn if no secrets but we need them.
+        # But actually we assume secrets.toml is present locally or on cloud.
+
 
     # Helper Functions
     def calculate_metrics(history):
@@ -88,6 +93,23 @@ def main():
         st.session_state.user_level = 0
         st.session_state.username = ""
 
+    def get_manager():
+        return stx.CookieManager()
+
+    cookie_manager = get_manager()
+    
+    # Check for existing cookie
+    # cookie_manager.get_all() # Must call this to ensure sync?
+    auth_token = cookie_manager.get(cookie="auth_token")
+
+    if not st.session_state.authenticated:
+        # Try auto-login from cookie
+        if auth_token and auth_token in USERS:
+            st.session_state.authenticated = True
+            st.session_state.user_level = USERS[auth_token]["level"]
+            st.session_state.username = auth_token
+            # st.rerun() # Might loop if not careful? No, authenticated becomes True.
+
     def login():
         st.title("Login")
         with st.form("login_form"):
@@ -99,6 +121,10 @@ def main():
                     st.session_state.authenticated = True
                     st.session_state.user_level = USERS[user]["level"]
                     st.session_state.username = user
+                    
+                    # Set Cookie for persistence (expires in 30 days)
+                    cookie_manager.set("auth_token", user, expires_at=datetime.datetime.now() + datetime.timedelta(days=30))
+                    
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
@@ -416,6 +442,8 @@ def main():
     
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
+        # Delete cookie
+        cookie_manager.delete("auth_token")
         st.rerun()
 
     if st.session_state.user_level == 1:
