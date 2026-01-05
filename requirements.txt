@@ -3,4 +3,5 @@ plotly
 yfinance
 pandas
 numpy
+extra-streamlit-components
 
