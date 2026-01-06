@@ -17,6 +17,13 @@ def main():
     INITIAL_BALANCE = 10000000 # 10 Million Yen for flexibility
     DEFAULT_TICKER = "7203.T"
     DEFAULT_TICKER = "7203.T"
+    # Random Ticker List (Major JP Stocks)
+    MAJOR_TICKERS = [
+        "7203.T", "9984.T", "6758.T", "6861.T", "8035.T", # Toyota, Softbank, Sony, Keyence, Tokyo Electron
+        "6501.T", "7974.T", "9432.T", "8306.T", "6098.T", # Hitachi, Nintendo, NTT, MUFG, Recruit
+        "4063.T", "4502.T", "6367.T", "6902.T", "7741.T", # Shin-Etsu, Takeda, Daikin, Denso, Hoya
+        "6981.T", "6954.T", "7267.T", "8411.T", "8001.T"  # Murata, Fanuc, Honda, Mizuho, Itochu
+    ]
     # INDEX_TICKER removed, will be selected by user
     # Authorization Config
     # Load users from st.secrets if available, else empty (or fallback to local dev secrets)
@@ -133,7 +140,7 @@ def main():
         login()
         return
 
-    def start_simulation(ticker, index_ticker, start_mode="Random", initial_balance=INITIAL_BALANCE):
+    def start_simulation(ticker, index_ticker, start_mode="Random", initial_balance=INITIAL_BALANCE, specific_date=None):
         with st.spinner("Loading Data..."):
             df = data_loader.fetch_data(ticker)
             if df is not None:
@@ -164,6 +171,19 @@ def main():
 
                 elif start_mode == "Latest":
                     st.session_state.current_step = len(df) - 1
+                
+                elif start_mode == "Specific Date" and specific_date:
+                    try:
+                        # Convert specific_date to timestamp
+                        target_ts = pd.Timestamp(specific_date)
+                        # Find nearest date (method='nearest' requires sorted index which it is)
+                        # get_indexer returns array of indices
+                        idx = df.index.get_indexer([target_ts], method='nearest')[0]
+                        st.session_state.current_step = max(100, idx) # Ensure buffer
+                    except Exception as e:
+                        st.sidebar.error(f"Date lookup failed: {e}")
+                        st.session_state.current_step = 100
+
                 else:
                     st.session_state.current_step = 100
             else:
@@ -327,13 +347,16 @@ def main():
                     open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
                     name='Price',
                     increasing_line_color='red', increasing_fillcolor='red',
-                    decreasing_line_color='green', decreasing_fillcolor='green'), row=1, col=1)
+                    decreasing_line_color='green', decreasing_fillcolor='green',
+                    hoverinfo='x+text', # Suppress default y (OHLC)
+                    text=[f"O:{o:,.0f}<br>H:{h:,.0f}<br>L:{l:,.0f}<br>C:{c:,.0f}" for o, h, l, c in zip(df['Open'], df['High'], df['Low'], df['Close'])]
+                    ), row=1, col=1)
 
         # MAs (Row 1)
         colors = {'MA5': 'orange', 'MA25': 'blue', 'MA75': 'green'}
         for ma, color in colors.items():
             if ma in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1), name=ma), row=1, col=1)
+                fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1), name=ma, hoverinfo='skip'), row=1, col=1)
 
         # Volume (Row 2) - same color logic: Red if Up, Green if Down
         # Up (Close >= Open) -> Red
@@ -450,9 +473,45 @@ def main():
         input_ticker = "7203.T"
         st.sidebar.text_input("Ticker", value=input_ticker, disabled=True)
     else:
-        input_ticker = st.sidebar.text_input("Ticker", DEFAULT_TICKER)
+        # Check if Random button was pressed
+        if 'random_ticker_trigger' not in st.session_state:
+            st.session_state.random_ticker_trigger = False
+            
+        col_t1, col_t2 = st.sidebar.columns([3, 1])
+        with col_t2:
+            if st.button("🎲", help="Random Ticker"):
+                st.session_state.random_ticker_trigger = True
+                
+        # Determine value to show
+        default_val = DEFAULT_TICKER
+        if st.session_state.random_ticker_trigger:
+            default_val = random.choice(MAJOR_TICKERS)
+            st.session_state.random_ticker_trigger = False # Reset
+            
+        # We need a key to force reload if value changes programmatically? 
+        # Or just use value=... and update session state?
+        # Streamlit text_input value updates don't persist well if key is same.
+        # Let's use session_state for the value source.
+        if 'ticker_input_val' not in st.session_state:
+            st.session_state.ticker_input_val = DEFAULT_TICKER
+            
+        if default_val != DEFAULT_TICKER: # If random selected
+             st.session_state.ticker_input_val = default_val
+
+        with col_t1:
+            input_ticker = st.text_input("Ticker", key="ticker_input_val")
     input_index = st.sidebar.selectbox("Index Ticker", ["^N225", "^TOPX", "^MOTHERS"], index=0)
-    start_mode_sel = st.sidebar.radio("Start Mode", ["Random", "Latest"])
+    
+    # Start Mode Logic
+    start_options = ["Random", "Latest"]
+    if st.session_state.user_level >= 2:
+        start_options.append("Specific Date")
+        
+    start_mode_sel = st.sidebar.radio("Start Mode", start_options)
+    
+    specific_date_val = None
+    if start_mode_sel == "Specific Date":
+        specific_date_val = st.sidebar.date_input("Start Date", value=datetime.date(2023, 1, 1))
     
     # Use text_input to allow comma formatting, parse manually
     initial_balance_str = st.sidebar.text_input("Initial Balance", value=f"{INITIAL_BALANCE:,}")
@@ -467,12 +526,9 @@ def main():
             
     if st.sidebar.button("Start / Restart"):
         # Map selection to mode string
-        if "Random" in start_mode_sel:
-            mode = "Random"
-        else:
-            mode = "Latest"
-        
-        start_simulation(input_ticker, input_index, mode, initial_balance_in)
+        mode = start_mode_sel
+            
+        start_simulation(input_ticker, input_index, mode, initial_balance_in, specific_date_val)
         st.rerun()
     # Stats Panel in Sidebar
     if st.session_state.simulation_started:
