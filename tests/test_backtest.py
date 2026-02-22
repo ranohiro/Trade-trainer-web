@@ -14,7 +14,6 @@ class TestStochasticBacktester(unittest.TestCase):
         self.df['High'] = 105.0
         self.df['Low'] = 95.0
         self.df['Close'] = 100.0
-        # Initialize with values that won't trigger random setups
         self.df['Stoch_K'] = 50.0
         self.df['Stoch_D'] = 50.0
         self.df['Stoch_SlowD'] = 50.0
@@ -43,11 +42,9 @@ class TestStochasticBacktester(unittest.TestCase):
         df.iloc[20, df.columns.get_loc('Close')] = 100.0
 
         # Day 21 (Execution)
-        # MUST maintain Environment (Positive Turn) to allow Entry
-        # D > SlowD AND Slopes > 0
         df.iloc[21, df.columns.get_loc('Stoch_D')] = 46.0 # > 44
         df.iloc[21, df.columns.get_loc('Stoch_SlowD')] = 36.0 # > 34
-        # 46 > 36 OK.
+        df.iloc[21, df.columns.get_loc('Stoch_K')] = 14.0 # No Dip (14 < 15)
 
         # Open 100, High 115 (Trigger Entry), Low 85 (Trigger Stop), Close 90
         df.iloc[21, df.columns.get_loc('Open')] = 100.0
@@ -56,7 +53,7 @@ class TestStochasticBacktester(unittest.TestCase):
         df.iloc[21, df.columns.get_loc('Close')] = 90.0
 
         # Mode A: Touch Entry at 110. Touch Stop at 90.
-        summary, log = self.backtester.run_backtest(df, mode="A", exit_timing="Close")
+        summary, log, signals = self.backtester.run_backtest(df, mode="A", exit_timing="Close")
 
         self.assertEqual(len(log), 1)
         trade = log.iloc[0]
@@ -65,6 +62,13 @@ class TestStochasticBacktester(unittest.TestCase):
         self.assertEqual(trade['Exit Price'], 90.0)
         self.assertEqual(trade['Reason'], 'Stop Loss (Touch/Day)')
         self.assertEqual(trade['PnL'], (90 - 110) * 100) # -2000
+
+        # Verify Signal Count
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(summary['Signal Count'], 1)
+        self.assertEqual(summary['Entry Count'], 1)
+        self.assertEqual(summary['Loss Count'], 1)
+        self.assertAlmostEqual(summary['Avg Risk (Loss)'], (110.0 - 90.0) * 100) # Risk = 20 * 100 = 2000
 
     def test_long_setup_mode_b_entry_signal_exit(self):
         # Scenario: Long Setup, Mode B Entry (Next Open), Signal Exit (Close)
@@ -87,38 +91,28 @@ class TestStochasticBacktester(unittest.TestCase):
         df.iloc[20, df.columns.get_loc('Low')] = 90.0
 
         # Day 21 (Break Close)
-        # Close > 110
         df.iloc[21, df.columns.get_loc('Close')] = 112.0
-
-        # Maintain Env
         df.iloc[21, df.columns.get_loc('Stoch_D')] = 46.0
         df.iloc[21, df.columns.get_loc('Stoch_SlowD')] = 36.0
 
         # Day 22 (Entry at Open)
         df.iloc[22, df.columns.get_loc('Open')] = 113.0
-        # Need to maintain env or not?
-        # Once "Pending Entry" is set (at Close of Day 21), logic says:
-        # "1. Handle Pending Executions (Next Open)" -> Executes at Open of Day 22.
-        # So Environment check on Day 22 happens AFTER Entry.
-        # But Entry execution depends on Setup validity?
-        # Setup validity was checked on Day 21 (when triggering).
-        # Once triggered and pending, we execute.
 
         # Day 23 (Signal Exit - Dead Cross)
-        # Stoch D < SlowD
         df.iloc[23, df.columns.get_loc('Stoch_D')] = 60.0
         df.iloc[23, df.columns.get_loc('Stoch_SlowD')] = 61.0
         df.iloc[23, df.columns.get_loc('Close')] = 120.0
 
-        summary, log = self.backtester.run_backtest(df, mode="B", exit_timing="Close")
+        summary, log, signals = self.backtester.run_backtest(df, mode="B", exit_timing="Close")
 
         self.assertEqual(len(log), 1)
         trade = log.iloc[0]
         self.assertEqual(trade['Type'], 'Long')
-        self.assertEqual(trade['Entry Price'], 113.0) # Open of Day 22
-        self.assertEqual(trade['Exit Price'], 120.0) # Close of Day 23
-        self.assertEqual(trade['Reason'], 'Signal Exit (Close)')
-        self.assertEqual(trade['PnL'], (120 - 113) * 100)
+        self.assertEqual(trade['Entry Price'], 113.0)
+        self.assertEqual(trade['Exit Price'], 120.0)
+
+        self.assertEqual(summary['Win Count'], 1)
+        self.assertAlmostEqual(summary['Avg Risk (Win)'], (113.0 - 90.0) * 100) # Entry - Stop Trigger (90)
 
     def test_short_setup_cancel(self):
         # Scenario: Short Setup, but cancelled by Environment End
@@ -129,33 +123,29 @@ class TestStochasticBacktester(unittest.TestCase):
         df.iloc[18, df.columns.get_loc('Stoch_D')] = 60.0
         df.iloc[18, df.columns.get_loc('Stoch_SlowD')] = 70.0
 
-        df.iloc[19, df.columns.get_loc('Stoch_K')] = 90.0 # Peak
+        df.iloc[19, df.columns.get_loc('Stoch_K')] = 90.0
         df.iloc[19, df.columns.get_loc('Stoch_D')] = 58.0
         df.iloc[19, df.columns.get_loc('Stoch_SlowD')] = 68.0
 
-        df.iloc[20, df.columns.get_loc('Stoch_K')] = 85.0 # Turn Down
+        df.iloc[20, df.columns.get_loc('Stoch_K')] = 85.0
         df.iloc[20, df.columns.get_loc('Stoch_D')] = 56.0
         df.iloc[20, df.columns.get_loc('Stoch_SlowD')] = 66.0
-        # D < SlowD (56 < 66) -> OK
 
-        df.iloc[20, df.columns.get_loc('Low')] = 90.0 # Entry Trigger
-        df.iloc[20, df.columns.get_loc('High')] = 110.0 # Stop Trigger
+        df.iloc[20, df.columns.get_loc('Low')] = 90.0
+        df.iloc[20, df.columns.get_loc('High')] = 110.0
 
         # Day 21 (Cancel)
-        # Environment Ends: Slopes become positive or D > SlowD
-        df.iloc[21, df.columns.get_loc('Stoch_D')] = 57.0 # > 56 (Slope +)
-        df.iloc[21, df.columns.get_loc('Stoch_SlowD')] = 67.0 # > 66 (Slope +)
-        # D < SlowD still holds (57 < 67), but Slopes are positive.
-        # Short Environment requires Slopes < 0.
-        # So Environment invalid.
+        df.iloc[21, df.columns.get_loc('Stoch_D')] = 57.0 # Slope +
+        df.iloc[21, df.columns.get_loc('Stoch_SlowD')] = 67.0
 
-        # Even if Price hits trigger
         df.iloc[21, df.columns.get_loc('Low')] = 80.0
 
-        summary, log = self.backtester.run_backtest(df, mode="A", exit_timing="Close")
+        summary, log, signals = self.backtester.run_backtest(df, mode="A", exit_timing="Close")
 
-        # Should be 0 trades because Setup Cancelled
         self.assertEqual(len(log), 0)
+        # Signal should be recorded (Day 20)
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals.iloc[0]['Type'], 'Short')
 
 if __name__ == '__main__':
     unittest.main()

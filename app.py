@@ -277,12 +277,12 @@ def main():
                 st.session_state.position = 0
                 st.session_state.avg_price = 0
                 st.session_state.pos_start_date = None
-            
+
             holding_days = ""
             if pnl != 0 or "Close" in trade_type or "Cover" in trade_type:
                 if st.session_state.pos_start_date is not None:
                     holding_days = (current_date - st.session_state.pos_start_date).days
-            
+
             if st.session_state.position != 0 and st.session_state.pos_start_date is None:
                 st.session_state.pos_start_date = current_date
 
@@ -299,7 +299,7 @@ def main():
             })
             st.rerun()
 
-        def draw_candlestick(df, title, trade_history=None):
+        def draw_candlestick(df, title, trade_history=None, signal_history=None):
             # Convert index to string to remove gaps (Category Axis)
             df = df.copy()
             df.index = df.index.strftime('%Y-%m-%d')
@@ -325,21 +325,44 @@ def main():
             vol_colors = ['red' if c >= o else 'green' for c, o in zip(df['Close'], df['Open'])]
             fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=vol_colors), row=2, col=1)
 
+            # Helper for Date Matching
+            dt_index = pd.to_datetime(df.index)
+            def get_date_str(target_date):
+                if target_date > dt_index[-1]: return None
+                try:
+                    idx = dt_index.get_indexer([target_date], method='bfill')[0]
+                except:
+                    idx = -1
+                if idx != -1:
+                    matched_date = dt_index[idx]
+                    if (matched_date - target_date).days <= 10:
+                        return matched_date.strftime('%Y-%m-%d')
+                return None
+
+            if signal_history:
+                sig_dates = []
+                sig_prices = []
+                sig_colors = []
+
+                for s in signal_history:
+                    d_str = get_date_str(s['Date'])
+                    if d_str:
+                        sig_dates.append(d_str)
+                        # Plot at Trigger Price or High/Low? Trigger is clearer for "Entry Condition"
+                        sig_prices.append(s['Trigger'])
+                        sig_colors.append('yellow')
+
+                if sig_dates:
+                    fig.add_trace(go.Scatter(x=sig_dates, y=sig_prices, mode='markers',
+                                            marker=dict(symbol='star', size=10, color='yellow', line=dict(width=1, color='black')),
+                                            name='Signal'), row=1, col=1)
+
             if trade_history:
-                dt_index = pd.to_datetime(df.index)
                 visible_trades = []
                 for t in trade_history:
-                    t_date = t['Date']
-                    if t_date > dt_index[-1]: continue
-                    try:
-                        idx = dt_index.get_indexer([t_date], method='bfill')[0]
-                    except:
-                        idx = -1
-                    if idx != -1:
-                        matched_date = dt_index[idx]
-                        if (matched_date - t_date).days <= 10:
-                            date_str = matched_date.strftime('%Y-%m-%d')
-                            visible_trades.append({**t, 'DateStr': date_str})
+                    d_str = get_date_str(t['Date'])
+                    if d_str:
+                        visible_trades.append({**t, 'DateStr': d_str})
 
                 buy_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'BUY']
                 buy_prices = [t['Price'] for t in visible_trades if t['Action'] == 'BUY']
@@ -613,8 +636,6 @@ def main():
                          st.error("Data ends before Start Date.")
                     else:
                         # Slice from Start Date (Backtester skips first 20 rows for stabilization)
-                        # To ensure users get trades from their Start Date, we should include a buffer.
-                        # Buffer: 30 days (~20 trading days)
                         buffer_days = 40
                         mask_start = ts_start - pd.Timedelta(days=buffer_days)
 
@@ -624,82 +645,119 @@ def main():
                             st.warning("Not enough data points in the selected range (need at least 20 + buffer).")
                         else:
                             backtester = backtest.StochasticBacktester(initial_balance=bt_balance)
-                            summary, log_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code)
+                            summary, log_df, signal_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code)
 
-                            # Filter results to show only trades within requested range
+                            # Filter results to show only trades/signals within requested range
+                            # Note: summary is initially calculated on df_run, so we must recalculate
+
+                            if not signal_df.empty:
+                                signal_df = signal_df[signal_df['Date'] >= ts_start]
+
                             if not log_df.empty:
                                 log_df = log_df[log_df['Signal Date'] >= ts_start]
 
-                                # Re-calculate summary for filtered trades
-                                if not log_df.empty:
-                                    wins = log_df[log_df['PnL'] > 0]
-                                    losses = log_df[log_df['PnL'] <= 0]
-                                    total_profit = wins['PnL'].sum()
-                                    total_loss = abs(losses['PnL'].sum())
-                                    net_pnl = total_profit - total_loss
-                                    pf = total_profit / total_loss if total_loss > 0 else float('inf')
-                                    win_rate = (len(wins) / len(log_df)) * 100
+                                # Re-calculate Summary Stats based on filtered data
+                                wins = log_df[log_df['PnL'] > 0]
+                                losses = log_df[log_df['PnL'] <= 0]
+                                n_wins = len(wins)
+                                n_losses = len(losses)
+                                n_trades = len(log_df)
 
-                                    n_wins = len(wins)
-                                    n_losses = len(losses)
-                                    avg_profit = total_profit / n_wins if n_wins > 0 else 0
-                                    avg_loss = total_loss / n_losses if n_losses > 0 else 0
-                                    payoff = avg_profit / avg_loss if avg_loss > 0 else float('inf')
-                                    avg_days = log_df['Holding Days'].mean() if len(log_df) > 0 else 0
+                                total_profit = wins['PnL'].sum()
+                                total_loss = abs(losses['PnL'].sum())
+                                net_pnl = total_profit - total_loss
+                                pf = total_profit / total_loss if total_loss > 0 else float('inf')
+                                win_rate = (n_wins / n_trades) * 100 if n_trades > 0 else 0
 
-                                    summary['Total Trades'] = len(log_df)
-                                    summary['Win Rate'] = win_rate
-                                    summary['Total PnL'] = net_pnl
-                                    summary['Profit Factor'] = pf
-                                    summary['Final Balance'] = bt_balance + net_pnl
-                                    summary['Avg Profit'] = avg_profit
-                                    summary['Avg Loss'] = avg_loss
-                                    summary['Payoff Ratio'] = payoff
-                                    summary['Avg Days'] = avg_days
-                                else:
-                                    summary = {"Total Trades": 0, "Win Rate": 0, "Total PnL": 0, "Profit Factor": 0, "Final Balance": bt_balance}
+                                avg_profit = total_profit / n_wins if n_wins > 0 else 0
+                                avg_loss = total_loss / n_losses if n_losses > 0 else 0
+                                avg_profit_pct = wins['PnL %'].mean() if n_wins > 0 else 0
+                                avg_loss_pct = losses['PnL %'].mean() if n_losses > 0 else 0
 
-                            # Display Results
-                            st.subheader("Backtest Results")
+                                avg_days_win = wins['Holding Days'].mean() if n_wins > 0 else 0
+                                avg_days_loss = losses['Holding Days'].mean() if n_losses > 0 else 0
 
+                                avg_risk_win = wins['Risk'].mean() if n_wins > 0 else 0
+                                avg_risk_pct_win = wins['Risk %'].mean() if n_wins > 0 else 0
+                                avg_risk_loss = losses['Risk'].mean() if n_losses > 0 else 0
+                                avg_risk_pct_loss = losses['Risk %'].mean() if n_losses > 0 else 0
+
+                                # Populate Display Data
+                                disp_stats = {
+                                    'Trade Chances': len(signal_df),
+                                    'Entry Count': n_trades,
+                                    'Win Count': n_wins,
+                                    'Avg Win Amt': f"¥{avg_profit:,.0f}",
+                                    'Avg Win Ret': f"{avg_profit_pct:.2f}%",
+                                    'Avg Win Days': f"{avg_days_win:.1f}",
+                                    'Avg Win Risk': f"¥{avg_risk_win:,.0f} ({avg_risk_pct_win:.2f}%)",
+                                    'Loss Count': n_losses,
+                                    'Avg Loss Amt': f"¥{avg_loss:,.0f}",
+                                    'Avg Loss Ret': f"{avg_loss_pct:.2f}%",
+                                    'Avg Loss Days': f"{avg_days_loss:.1f}",
+                                    'Avg Loss Risk': f"¥{avg_risk_loss:,.0f} ({avg_risk_pct_loss:.2f}%)",
+                                    'Total PnL': f"¥{net_pnl:,.0f}",
+                                    'Final Balance': f"¥{bt_balance + net_pnl:,.0f}"
+                                }
+                            else:
+                                disp_stats = {k: 0 for k in ['Trade Chances', 'Entry Count', 'Win Count', 'Loss Count']}
+                                disp_stats['Trade Chances'] = len(signal_df) # Still show signals even if no trades
+                                disp_stats['Total PnL'] = "¥0"
+                                disp_stats['Final Balance'] = f"¥{bt_balance:,.0f}"
+
+                            # --- 1. Backtest Analyses (Chart + Equity) ---
+                            st.subheader("Backtest Analyses")
+
+                            # Chart
+                            df_chart = df_run[df_run.index >= ts_start]
+
+                            # Pass signals and trades to drawer
+                            sig_list = signal_df.to_dict('records') if not signal_df.empty else []
+                            trade_list = log_df.to_dict('records') if not log_df.empty else []
+
+                            fig = draw_candlestick(df_chart, f"Backtest: {bt_ticker}", trade_history=trade_list, signal_history=sig_list)
+                            st.plotly_chart(fig, use_container_width=True)
+
+                            # Equity Curve
                             if not log_df.empty:
-                                # 1. Summary Metrics
-                                col1, col2, col3, col4 = st.columns(4)
-                                col1.metric("Total Trades", summary['Total Trades'])
-                                col2.metric("Win Rate", f"{summary['Win Rate']:.1f}%")
-                                col3.metric("Profit Factor", f"{summary['Profit Factor']:.2f}")
-                                col4.metric("Total PnL", f"¥{summary['Total PnL']:,.0f}")
-
-                                col1, col2, col3, col4 = st.columns(4)
-                                col1.metric("Avg Profit", f"¥{summary.get('Avg Profit', 0):,.0f}")
-                                col2.metric("Avg Loss", f"¥{summary.get('Avg Loss', 0):,.0f}")
-                                col3.metric("Payoff Ratio", f"{summary.get('Payoff Ratio', 0):.2f}")
-                                col4.metric("Avg Hold (Days)", f"{summary.get('Avg Days', 0):.1f}")
-
-                                st.metric("Final Balance", f"¥{summary['Final Balance']:,.0f}")
-
-                                # 2. Equity Curve (Realized)
-                                # Construct equity curve from filtered trades
-                                # Base dataframe is df_run filtered by ts_start
-                                df_chart = df_run[df_run.index >= ts_start]
                                 equity_series = pd.Series(index=df_chart.index, data=0.0)
-
-                                # Accumulate PnL by Exit Date
                                 pnl_by_date = log_df.groupby('Exit Date')['PnL'].sum()
                                 pnl_series = pnl_by_date.reindex(df_chart.index, fill_value=0).cumsum()
                                 equity_series = bt_balance + pnl_series
-
                                 st.line_chart(equity_series)
-                                st.caption("Equity Curve (Realized PnL)")
 
-                                # 3. Trade Log
+                            # --- 2. Backtest Results (Detailed Stats) ---
+                            st.subheader("Backtest Results")
+
+                            # Layout: 2 Columns of Data
+                            c1, c2 = st.columns(2)
+
+                            with c1:
+                                st.markdown("#### Trading Metrics")
+                                st.write(f"**Trade Chances (Signals):** {disp_stats.get('Trade Chances', 0)}")
+                                st.write(f"**Entry Count:** {disp_stats.get('Entry Count', 0)}")
+                                st.write(f"**Total PnL:** {disp_stats.get('Total PnL', 0)}")
+                                st.write(f"**Final Balance:** {disp_stats.get('Final Balance', 0)}")
+
+                            with c2:
+                                st.markdown("#### Win/Loss Stats")
+                                # Win Stats
+                                st.write(f"**Wins:** {disp_stats.get('Win Count', 0)}")
+                                st.caption(f"Avg: {disp_stats.get('Avg Win Amt')} ({disp_stats.get('Avg Win Ret')}) | Days: {disp_stats.get('Avg Win Days')} | Risk: {disp_stats.get('Avg Win Risk')}")
+
+                                # Loss Stats
+                                st.write(f"**Losses:** {disp_stats.get('Loss Count', 0)}")
+                                st.caption(f"Avg: {disp_stats.get('Avg Loss Amt')} ({disp_stats.get('Avg Loss Ret')}) | Days: {disp_stats.get('Avg Loss Days')} | Risk: {disp_stats.get('Avg Loss Risk')}")
+
+                            # Trade Log
+                            if not log_df.empty:
+                                st.markdown("#### Trade Log")
                                 st.dataframe(log_df)
-
                                 csv = log_df.to_csv(index=False).encode('utf-8')
                                 st.download_button("Download CSV", csv, "backtest_results.csv", "text/csv")
-
                             else:
-                                st.warning("No trades generated in this period.")
+                                st.info("No trades executed.")
+
                 else:
                     st.error("Could not fetch data.")
 
