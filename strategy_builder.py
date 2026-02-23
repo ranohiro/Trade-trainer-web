@@ -27,7 +27,9 @@ INDICATORS = [
     "Stoch_K_prev", "Stoch_D_prev", "Stoch_SlowD_prev",
     "Stoch_K_Angle",
     "RSI",
-    "SMA5_dev", "SMA25_dev",
+    "SMA5_dev", "SMA25_dev", "SMA75_dev",
+    "MA5_Slope", "MA25_Slope", "MA75_Slope",
+    "MA5_above_MA25", "MA5_above_MA75", "MA25_above_MA75",
     "ATR", "Volume_Ratio",
     "Open_Gap_%",
     "dip_formed", "peak_formed"

@@ -61,6 +61,17 @@ def calculate_indicators(df):
     # SMA Deviations (%)
     df['SMA5_dev'] = (df['Close'] / df['MA5'] - 1) * 100
     df['SMA25_dev'] = (df['Close'] / df['MA25'] - 1) * 100
+    df['SMA75_dev'] = (df['Close'] / df['MA75'] - 1) * 100
+
+    # SMA Slopes (Price difference between today's SMA and yesterday's SMA)
+    df['MA5_Slope'] = df['MA5'].diff()
+    df['MA25_Slope'] = df['MA25'].diff()
+    df['MA75_Slope'] = df['MA75'].diff()
+
+    # SMA Positioning (Booleans for easy rule creation: e.g. MA5 > MA25)
+    df['MA5_above_MA25'] = df['MA5'] > df['MA25']
+    df['MA5_above_MA75'] = df['MA5'] > df['MA75']
+    df['MA25_above_MA75'] = df['MA25'] > df['MA75']
 
     # ATR (14-day)
     high_low = df['High'] - df['Low']

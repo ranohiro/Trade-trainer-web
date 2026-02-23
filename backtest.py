@@ -470,134 +470,139 @@ class StochasticBacktester:
                 }
 
             if setup_state and position == 0 and not pending_action:
-                triggered = False
+                # 1. First, check if the setup environment is still valid based on Maintain Rules
+                is_valid_env = False
+                if setup_state == 'Long':
+                    maintain_rules = rules.get('maintain_long_rules', [])
+                    if not maintain_rules or self.evaluate_rules(row, maintain_rules):
+                         is_valid_env = True
+                elif setup_state == 'Short':
+                    maintain_rules = rules.get('maintain_short_rules', [])
+                    if not maintain_rules or self.evaluate_rules(row, maintain_rules):
+                        is_valid_env = True
 
-                if mode == "A":
-                    if setup_state == 'Long':
-                        if high_p > setup_entry_trigger:
-                            entry_exec_price = max(setup_entry_trigger, open_p)
-                            position = 100
-                            risk_amt = abs(entry_exec_price - setup_stop_trigger) * 100
-                            risk_pct = (abs(entry_exec_price - setup_stop_trigger) / entry_exec_price) * 100
+                if not is_valid_env:
+                    setup_state = None
 
-                            current_trade = {
-                                'Trade No': len(trade_history) + 1,
-                                'Type': 'Long',
-                                'Signal Date': setup_signal_date,
-                                'Trigger Entry Price': setup_entry_trigger,
-                                'Entry Date': date,
-                                'Entry Gap %': ((open_p / prev['Close']) - 1) * 100,
-                                'Entry Price': entry_exec_price,
-                                'Qty': 100,
-                                'Stop Trigger': setup_stop_trigger,
-                                'Risk': risk_amt,
-                                'Risk %': risk_pct,
-                                'MFE Price': entry_exec_price,
-                                'MAE Price': entry_exec_price,
-                                'MFE RSI': row.get('RSI', 0),
-                                'MFE %K': row.get('Stoch_K', 0),
-                                'MFE Volume Ratio': row.get('Volume_Ratio', 0),
-                                'MAE RSI': row.get('RSI', 0),
-                                'MAE %K': row.get('Stoch_K', 0),
-                                'MAE Volume Ratio': row.get('Volume_Ratio', 0)
-                            }
-                            current_trade.update(setup_signal_props)
-                            
-                            entry_price = entry_exec_price
-                            stop_price = setup_stop_trigger
-                            setup_state = None
-                            triggered = True
+                if setup_state == 'Long' and close_p < setup_stop_trigger:
+                    setup_state = None
+                elif setup_state == 'Short' and close_p > setup_stop_trigger:
+                    setup_state = None
 
-                            if low_p <= stop_price:
-                                pnl = (stop_price - entry_price) * 100
-                                close_trade(date, stop_price, "Stop Loss (Touch/Day)", pnl, 100, prev)
-                                position = 0
+                # 2. Skip trigger execution if the setup was just cancelled above
+                if not setup_state:
+                    triggered = False
+                else:
+                    triggered = False
 
-                    elif setup_state == 'Short':
-                        if low_p < setup_entry_trigger:
-                            entry_exec_price = min(setup_entry_trigger, open_p)
-                            position = -100
-                            risk_amt = abs(entry_exec_price - setup_stop_trigger) * 100
-                            risk_pct = (abs(entry_exec_price - setup_stop_trigger) / entry_exec_price) * 100
+                    if mode == "A":
+                        if setup_state == 'Long':
+                            # Entry line: setup_entry_trigger
+                            if high_p > setup_entry_trigger:
+                                entry_exec_price = max(setup_entry_trigger, open_p)
+                                position = 100
+                                risk_amt = abs(entry_exec_price - setup_stop_trigger) * 100
+                                risk_pct = (abs(entry_exec_price - setup_stop_trigger) / entry_exec_price) * 100
 
-                            current_trade = {
-                                'Trade No': len(trade_history) + 1,
-                                'Type': 'Short',
-                                'Signal Date': setup_signal_date,
-                                'Trigger Entry Price': setup_entry_trigger,
-                                'Entry Date': date,
-                                'Entry Gap %': ((open_p / prev['Close']) - 1) * 100,
-                                'Entry Price': entry_exec_price,
-                                'Qty': 100,
-                                'Stop Trigger': setup_stop_trigger,
-                                'Risk': risk_amt,
-                                'Risk %': risk_pct,
-                                'MFE Price': entry_exec_price,
-                                'MAE Price': entry_exec_price,
-                                'MFE RSI': row.get('RSI', 0),
-                                'MFE %K': row.get('Stoch_K', 0),
-                                'MFE Volume Ratio': row.get('Volume_Ratio', 0),
-                                'MAE RSI': row.get('RSI', 0),
-                                'MAE %K': row.get('Stoch_K', 0),
-                                'MAE Volume Ratio': row.get('Volume_Ratio', 0)
-                            }
-                            current_trade.update(setup_signal_props)
-                            
-                            entry_price = entry_exec_price
-                            stop_price = setup_stop_trigger
-                            setup_state = None
-                            triggered = True
+                                current_trade = {
+                                    'Trade No': len(trade_history) + 1,
+                                    'Type': 'Long',
+                                    'Signal Date': setup_signal_date,
+                                    'Trigger Entry Price': setup_entry_trigger,
+                                    'Entry Date': date,
+                                    'Entry Gap %': ((open_p / prev['Close']) - 1) * 100,
+                                    'Entry Price': entry_exec_price,
+                                    'Qty': 100,
+                                    'Stop Trigger': setup_stop_trigger,
+                                    'Risk': risk_amt,
+                                    'Risk %': risk_pct,
+                                    'MFE Price': entry_exec_price,
+                                    'MAE Price': entry_exec_price,
+                                    'MFE RSI': row.get('RSI', 0),
+                                    'MFE %K': row.get('Stoch_K', 0),
+                                    'MFE Volume Ratio': row.get('Volume_Ratio', 0),
+                                    'MAE RSI': row.get('RSI', 0),
+                                    'MAE %K': row.get('Stoch_K', 0),
+                                    'MAE Volume Ratio': row.get('Volume_Ratio', 0)
+                                }
+                                current_trade.update(setup_signal_props)
+                                
+                                entry_price = entry_exec_price
+                                stop_price = setup_stop_trigger
+                                setup_state = None
+                                triggered = True
 
-                            if high_p >= stop_price:
-                                pnl = (entry_price - stop_price) * 100
-                                close_trade(date, stop_price, "Stop Loss (Touch/Day)", pnl, 100, prev)
-                                position = 0
+                                if low_p <= stop_price:
+                                    pnl = (stop_price - entry_price) * 100
+                                    close_trade(date, stop_price, "Stop Loss (Touch/Day)", pnl, 100, prev)
+                                    position = 0
 
-                elif mode == "B":
-                    if setup_state == 'Long':
-                        if close_p > setup_entry_trigger:
-                            pending_action = {
-                                'type': 'Entry',
-                                'direction': 'Long',
-                                'setup_entry_trigger': setup_entry_trigger,
-                                'stop_trigger': setup_stop_trigger,
-                                'signal_date': setup_signal_date,
-                                'signal_props': setup_signal_props
-                            }
-                            setup_state = None
-                            triggered = True
+                        elif setup_state == 'Short':
+                            if low_p < setup_entry_trigger:
+                                entry_exec_price = min(setup_entry_trigger, open_p)
+                                position = -100
+                                risk_amt = abs(entry_exec_price - setup_stop_trigger) * 100
+                                risk_pct = (abs(entry_exec_price - setup_stop_trigger) / entry_exec_price) * 100
 
-                    elif setup_state == 'Short':
-                        if close_p < setup_entry_trigger:
-                            pending_action = {
-                                'type': 'Entry',
-                                'direction': 'Short',
-                                'setup_entry_trigger': setup_entry_trigger,
-                                'stop_trigger': setup_stop_trigger,
-                                'signal_date': setup_signal_date,
-                                'signal_props': setup_signal_props
-                            }
-                            setup_state = None
-                            triggered = True
+                                current_trade = {
+                                    'Trade No': len(trade_history) + 1,
+                                    'Type': 'Short',
+                                    'Signal Date': setup_signal_date,
+                                    'Trigger Entry Price': setup_entry_trigger,
+                                    'Entry Date': date,
+                                    'Entry Gap %': ((open_p / prev['Close']) - 1) * 100,
+                                    'Entry Price': entry_exec_price,
+                                    'Qty': 100,
+                                    'Stop Trigger': setup_stop_trigger,
+                                    'Risk': risk_amt,
+                                    'Risk %': risk_pct,
+                                    'MFE Price': entry_exec_price,
+                                    'MAE Price': entry_exec_price,
+                                    'MFE RSI': row.get('RSI', 0),
+                                    'MFE %K': row.get('Stoch_K', 0),
+                                    'MFE Volume Ratio': row.get('Volume_Ratio', 0),
+                                    'MAE RSI': row.get('RSI', 0),
+                                    'MAE %K': row.get('Stoch_K', 0),
+                                    'MAE Volume Ratio': row.get('Volume_Ratio', 0)
+                                }
+                                current_trade.update(setup_signal_props)
+                                
+                                entry_price = entry_exec_price
+                                stop_price = setup_stop_trigger
+                                setup_state = None
+                                triggered = True
 
-                if not triggered and setup_state:
-                    is_valid_env = False
-                    if setup_state == 'Long':
-                        maintain_rules = rules.get('maintain_long_rules', [])
-                        if not maintain_rules or self.evaluate_rules(row, maintain_rules):
-                             is_valid_env = True
-                    elif setup_state == 'Short':
-                        maintain_rules = rules.get('maintain_short_rules', [])
-                        if not maintain_rules or self.evaluate_rules(row, maintain_rules):
-                            is_valid_env = True
+                                if high_p >= stop_price:
+                                    pnl = (entry_price - stop_price) * 100
+                                    close_trade(date, stop_price, "Stop Loss (Touch/Day)", pnl, 100, prev)
+                                    position = 0
 
-                    if not is_valid_env:
-                        setup_state = None
+                    elif mode == "B":
+                        if setup_state == 'Long':
+                            if close_p > setup_entry_trigger:
+                                pending_action = {
+                                    'type': 'Entry',
+                                    'direction': 'Long',
+                                    'setup_entry_trigger': setup_entry_trigger,
+                                    'stop_trigger': setup_stop_trigger,
+                                    'signal_date': setup_signal_date,
+                                    'signal_props': setup_signal_props
+                                }
+                                setup_state = None
+                                triggered = True
 
-                    if setup_state == 'Long' and close_p < setup_stop_trigger:
-                        setup_state = None
-                    elif setup_state == 'Short' and close_p > setup_stop_trigger:
-                        setup_state = None
+                        elif setup_state == 'Short':
+                            if close_p < setup_entry_trigger:
+                                pending_action = {
+                                    'type': 'Entry',
+                                    'direction': 'Short',
+                                    'setup_entry_trigger': setup_entry_trigger,
+                                    'stop_trigger': setup_stop_trigger,
+                                    'signal_date': setup_signal_date,
+                                    'signal_props': setup_signal_props
+                                }
+                                setup_state = None
+                                triggered = True
 
             if new_setup:
                 # Record Signal
