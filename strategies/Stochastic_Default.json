@@ -1,0 +1,128 @@
+{
+  "strategy_name": "Stochastic_Default_ver1",
+  "memo": "ストキャスティクス陽転/陰転＋押し目・戻りを狙うトレード手法",
+  "setup_long_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    },
+    {
+      "left": "Stoch_D",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_D_prev"
+    },
+    {
+      "left": "Stoch_SlowD",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD_prev"
+    },
+    {
+      "left": "dip_formed",
+      "operator": "==",
+      "right_type": "value",
+      "right": true
+    }
+  ],
+  "setup_short_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    },
+    {
+      "left": "Stoch_D",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_D_prev"
+    },
+    {
+      "left": "Stoch_SlowD",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD_prev"
+    },
+    {
+      "left": "peak_formed",
+      "operator": "==",
+      "right_type": "value",
+      "right": true
+    }
+  ],
+  "maintain_long_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    },
+    {
+      "left": "Stoch_D",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_D_prev"
+    },
+    {
+      "left": "Stoch_SlowD",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD_prev"
+    }
+  ],
+  "maintain_short_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    },
+    {
+      "left": "Stoch_D",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_D_prev"
+    },
+    {
+      "left": "Stoch_SlowD",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD_prev"
+    }
+  ],
+  "exit_long_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": "<",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    }
+  ],
+  "exit_short_rules": [
+    {
+      "left": "Stoch_D",
+      "operator": ">",
+      "right_type": "indicator",
+      "right": "Stoch_SlowD"
+    }
+  ],
+  "entry_logic_long": {
+    "entry_type": "recent_high",
+    "lookback": 5
+  },
+  "stop_logic_long": {
+    "stop_type": "current_low",
+    "lookback": 1
+  },
+  "entry_logic_short": {
+    "entry_type": "recent_low",
+    "lookback": 5
+  },
+  "stop_logic_short": {
+    "stop_type": "current_high",
+    "lookback": 1
+  }
+}
