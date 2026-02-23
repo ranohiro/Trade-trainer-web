@@ -109,5 +109,63 @@ class TestDynamicRules(unittest.TestCase):
         self.assertEqual(log.iloc[0]['Exit Date'], dates[28])
         self.assertEqual(log.iloc[0]['Reason'], 'Signal Exit (Close)')
 
+    def test_dynamic_price_logic(self):
+        # Test the newly added dynamic pricing logic (entry_logic_long, etc.)
+        dates = pd.date_range(start='2023-01-01', periods=50, freq='D')
+        df = pd.DataFrame(index=dates)
+        df['Open'] = 100.0
+        df['High'] = 100.0
+        df['Low'] = 100.0
+        df['Close'] = 100.0
+        df['Stoch_K'] = 50.0
+        df['Stoch_D'] = 50.0
+        df['Stoch_SlowD'] = 50.0
+
+        # Prepare Data for Scenario
+        # Day 25: Signal Day (Stoch_K > 70)
+        df.iloc[25, df.columns.get_loc('Stoch_K')] = 80.0
+
+        # Custom Price History for Logic Check
+        # Day 23: High 120
+        # Day 24: High 130
+        # Day 25: High 110
+        df.iloc[23, df.columns.get_loc('High')] = 120.0
+        df.iloc[24, df.columns.get_loc('High')] = 130.0
+        df.iloc[25, df.columns.get_loc('High')] = 110.0
+
+        # Case 1: recent_high with lookback 2 (Should look at Day 24, 25) -> Max is 130
+        custom_rules_lb2 = {
+            "setup_long_rules": [{"left": "Stoch_K", "operator": ">", "right_type": "value", "right": 70.0}],
+            "setup_short_rules": [{"left": "Stoch_K", "operator": ">", "right_type": "value", "right": 999.0}],
+            "entry_logic_long": {"entry_type": "recent_high", "lookback": 2},
+            "stop_logic_long": {"stop_type": "current_low", "lookback": 1},
+        }
+
+        _, log, _ = self.backtester.run_backtest(df, mode="B", rules=custom_rules_lb2)
+        # Mode B creates a pending entry based on setup.
+        # We need to check if the pending entry has the correct price.
+        # Actually run_backtest returns log of EXECUTED trades.
+        # Let's check signal history or ensure it executes.
+
+        # To execute, we need Day 26 Close > Trigger (for Mode B Long)
+        # Trigger should be 130.
+        df.iloc[26, df.columns.get_loc('Close')] = 131.0
+
+        summary, log, signals = self.backtester.run_backtest(df, mode="B", rules=custom_rules_lb2)
+
+        # Check Signal Trigger Price
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals.iloc[0]['Trigger'], 130.0)
+
+        # Case 2: recent_high with lookback 1 (Day 25 only) -> Max is 110
+        custom_rules_lb1 = {
+             "setup_long_rules": [{"left": "Stoch_K", "operator": ">", "right_type": "value", "right": 70.0}],
+             "setup_short_rules": [{"left": "Stoch_K", "operator": ">", "right_type": "value", "right": 999.0}],
+             "entry_logic_long": {"entry_type": "recent_high", "lookback": 1},
+             "stop_logic_long": {"stop_type": "current_low", "lookback": 1},
+        }
+        summary, log, signals = self.backtester.run_backtest(df, mode="B", rules=custom_rules_lb1)
+        self.assertEqual(signals.iloc[0]['Trigger'], 110.0)
+
 if __name__ == '__main__':
     unittest.main()

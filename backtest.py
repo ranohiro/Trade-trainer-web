@@ -82,6 +82,44 @@ class StochasticBacktester:
 
         return True
 
+    def calculate_price(self, df, i, logic):
+        """
+        Calculates a price based on the provided logic dictionary.
+
+        Supported types:
+        - recent_high (lookback)
+        - recent_low (lookback)
+        - current_high
+        - current_low
+        - close_price (current close)
+        - next_open (handled outside via Mode B usually, but could be calc here if needed)
+        """
+        if not logic:
+            return 0.0
+
+        l_type = logic.get('entry_type', logic.get('stop_type', ''))
+        lookback = logic.get('lookback', 1)
+
+        # Adjust index range.
+        # For lookback=5 at index i: [i-4, i-3, i-2, i-1, i] (inclusive)
+        start_idx = max(0, i - lookback + 1)
+        end_idx = i + 1 # iloc slice is exclusive at end
+
+        if l_type == 'recent_high':
+            return df['High'].iloc[start_idx:end_idx].max()
+        elif l_type == 'recent_low':
+            return df['Low'].iloc[start_idx:end_idx].min()
+        elif l_type == 'current_high':
+            return df['High'].iloc[i]
+        elif l_type == 'current_low':
+            return df['Low'].iloc[i]
+        elif l_type == 'close_price':
+            return df['Close'].iloc[i]
+        elif l_type == 'open_price':
+             return df['Open'].iloc[i]
+
+        return 0.0
+
     def get_default_rules(self):
         """
         Returns the hardcoded logic as a dynamic rule set.
@@ -116,7 +154,13 @@ class StochasticBacktester:
             ],
             "exit_short_rules": [
                 {"left": "Stoch_D", "operator": ">", "right_type": "indicator", "right": "Stoch_SlowD"}
-            ]
+            ],
+
+            # New Price Logic
+            "entry_logic_long": {"entry_type": "recent_high", "lookback": 5},
+            "stop_logic_long": {"stop_type": "current_low", "lookback": 1},
+            "entry_logic_short": {"entry_type": "recent_low", "lookback": 5},
+            "stop_logic_short": {"stop_type": "current_high", "lookback": 1}
         }
 
     def run_backtest(self, df, mode="A", exit_timing="Close", rules=None):
@@ -397,15 +441,20 @@ class StochasticBacktester:
             long_rules = rules.get('setup_long_rules', [])
             if long_rules and self.evaluate_rules(row, long_rules):
                 new_setup = 'Long'
-                trig_entry = df['High'].iloc[i-4:i+1].max()
-                trig_stop = low_p
+                # trig_entry = df['High'].iloc[i-4:i+1].max()
+                # trig_stop = low_p
+                trig_entry = self.calculate_price(df, i, rules.get('entry_logic_long', {}))
+                trig_stop = self.calculate_price(df, i, rules.get('stop_logic_long', {}))
+
             # Evaluate Short Setup
             else:
                 short_rules = rules.get('setup_short_rules', [])
                 if short_rules and self.evaluate_rules(row, short_rules):
                     new_setup = 'Short'
-                    trig_entry = df['Low'].iloc[i-4:i+1].min()
-                    trig_stop = high_p
+                    # trig_entry = df['Low'].iloc[i-4:i+1].min()
+                    # trig_stop = high_p
+                    trig_entry = self.calculate_price(df, i, rules.get('entry_logic_short', {}))
+                    trig_stop = self.calculate_price(df, i, rules.get('stop_logic_short', {}))
 
             if new_setup:
                 signal_props = {
