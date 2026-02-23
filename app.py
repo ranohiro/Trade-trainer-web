@@ -9,6 +9,10 @@ import sys
 import extra_streamlit_components as stx
 import data_loader
 import backtest
+import strategy_builder
+import json
+import os
+import glob
 
 def main():
     # Page Config
@@ -259,7 +263,7 @@ def main():
     st.sidebar.write(f"User: {st.session_state.username} (Level {st.session_state.user_level})")
 
     # App Mode Selector
-    app_mode = st.sidebar.radio("Application Mode", ["Manual Practice", "Auto Backtest"])
+    app_mode = st.sidebar.radio("Application Mode", ["Manual Practice", "Strategy Builder", "Auto Backtest"])
 
     if st.sidebar.button("Logout"):
         st.session_state.authenticated = False
@@ -608,6 +612,9 @@ def main():
         else:
             st.info("Welcome to Trade Training Studio. Configure settings in the sidebar and start.")
 
+    elif app_mode == "Strategy Builder":
+        strategy_builder.render_strategy_builder()
+
     elif app_mode == "Auto Backtest":
         st.header("Auto Backtest Mode")
 
@@ -642,11 +649,50 @@ def main():
                                    ["Close (Same Day)", "Open (Next Day)"],
                                    index=0, key="bt_exit")
             exit_code = "Close" if "Close" in bt_exit else "Open"
+
+            # Strategy Selection
+            st.subheader("Strategy Rules")
+            strategy_files = glob.glob("strategies/*.json")
+            strategy_files = [os.path.basename(f) for f in strategy_files]
+
+            bt_strategy_sel = st.selectbox("Select Strategy", ["Default (Hardcoded)", "Current Editor Strategy"] + strategy_files, key="bt_strat_sel")
             
             run_bt = st.button("Run Backtest", type="primary")
 
         # --- Main Area ---
         if run_bt:
+            # Prepare Rules
+            bt_rules = None
+            if bt_strategy_sel == "Default (Hardcoded)":
+                bt_rules = None
+            elif bt_strategy_sel == "Current Editor Strategy":
+                # Construct from session state if available, else None
+                # We need to ensure we grab all relevant keys
+                if 'setup_long_rules' in st.session_state:
+                     bt_rules = {
+                         "setup_long_rules": st.session_state.get('setup_long_rules', []),
+                         "setup_short_rules": st.session_state.get('setup_short_rules', []),
+                         "exit_long_rules": st.session_state.get('exit_long_rules', []),
+                         "exit_short_rules": st.session_state.get('exit_short_rules', []),
+                         "entry_logic_long": st.session_state.get('entry_logic_long', {}),
+                         "stop_logic_long": st.session_state.get('stop_logic_long', {}),
+                         "entry_logic_short": st.session_state.get('entry_logic_short', {}),
+                         "stop_logic_short": st.session_state.get('stop_logic_short', {}),
+                         "maintain_long_rules": [],
+                         "maintain_short_rules": []
+                     }
+                else:
+                    st.warning("No strategy loaded in Editor. Using Default.")
+                    bt_rules = None
+            else:
+                # Load from file
+                try:
+                    with open(f"strategies/{bt_strategy_sel}", "r") as f:
+                        bt_rules = json.load(f)
+                except Exception as e:
+                    st.error(f"Failed to load strategy file: {e}")
+                    bt_rules = None
+
             with st.spinner(f"Running Backtest for {bt_ticker}..."):
                 # 1. Fetch Data
                 df_bt = data_loader.fetch_data(bt_ticker)
@@ -672,7 +718,7 @@ def main():
                             st.warning("Not enough data points in the selected range (need at least 20 + buffer).")
                         else:
                             backtester = backtest.StochasticBacktester(initial_balance=bt_balance)
-                            summary, log_df, signal_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code)
+                            summary, log_df, signal_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code, rules=bt_rules)
                             
                             st.session_state.bt_results = {
                                 'df_run': df_run,
@@ -681,7 +727,8 @@ def main():
                                 'signal_df': signal_df,
                                 'ts_start': ts_start,
                                 'ts_end': ts_end,
-                                'bt_balance': bt_balance
+                                'bt_balance': bt_balance,
+                                'bt_rules': bt_rules
                             }
                 else:
                     st.error("Could not fetch data.")
@@ -694,6 +741,7 @@ def main():
             ts_start = res['ts_start']
             ts_end = res['ts_end']
             bt_balance = res['bt_balance']
+            bt_rules = res.get('bt_rules', None)
             backtester = backtest.StochasticBacktester(initial_balance=bt_balance)
 
 
