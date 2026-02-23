@@ -65,10 +65,12 @@ class TestStochasticBacktester(unittest.TestCase):
 
         # Verify Signal Count
         self.assertEqual(len(signals), 1)
-        self.assertEqual(summary['Signal Count'], 1)
-        self.assertEqual(summary['Entry Count'], 1)
-        self.assertEqual(summary['Loss Count'], 1)
-        self.assertAlmostEqual(summary['Avg Risk (Loss)'], (110.0 - 90.0) * 100) # Risk = 20 * 100 = 2000
+
+        # Access nested summary['Total']
+        self.assertEqual(summary['Total']['Signal Count'], 1)
+        self.assertEqual(summary['Total']['Entry Count'], 1)
+        self.assertEqual(summary['Total']['Loss Count'], 1)
+        self.assertAlmostEqual(summary['Total']['Avg Risk (Loss)'], (110.0 - 90.0) * 100) # Risk = 20 * 100 = 2000
 
     def test_long_setup_mode_b_entry_signal_exit(self):
         # Scenario: Long Setup, Mode B Entry (Next Open), Signal Exit (Close)
@@ -111,8 +113,8 @@ class TestStochasticBacktester(unittest.TestCase):
         self.assertEqual(trade['Entry Price'], 113.0)
         self.assertEqual(trade['Exit Price'], 120.0)
 
-        self.assertEqual(summary['Win Count'], 1)
-        self.assertAlmostEqual(summary['Avg Risk (Win)'], (113.0 - 90.0) * 100) # Entry - Stop Trigger (90)
+        self.assertEqual(summary['Total']['Win Count'], 1)
+        self.assertAlmostEqual(summary['Total']['Avg Risk (Win)'], (113.0 - 90.0) * 100) # Entry - Stop Trigger (90)
 
     def test_short_setup_cancel(self):
         # Scenario: Short Setup, but cancelled by Environment End
