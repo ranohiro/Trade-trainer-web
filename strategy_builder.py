@@ -3,6 +3,9 @@ import json
 import os
 import glob
 
+# Ensure strategies directory exists
+os.makedirs("strategies", exist_ok=True)
+
 # Default Strategy Template
 DEFAULT_STRATEGY = {
     "strategy_name": "New Strategy",
