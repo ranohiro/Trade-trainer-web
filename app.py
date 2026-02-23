@@ -69,6 +69,131 @@ def main():
 
         return max_drawdown
 
+    def draw_candlestick(df, title, trade_history=None, signal_history=None):
+        # Convert index to string to remove gaps (Category Axis)
+        df = df.copy()
+        df.index = df.index.strftime('%Y-%m-%d')
+
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
+                            vertical_spacing=0.03, subplot_titles=(title, 'Stochastics', 'Volume'),
+                            row_heights=[0.5, 0.3, 0.2])
+
+        fig.add_trace(go.Candlestick(x=df.index,
+                    open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
+                    name='Price',
+                    increasing_line_color='red', increasing_fillcolor='red',
+                    decreasing_line_color='green', decreasing_fillcolor='green',
+                    hoverinfo='x+text',
+                    text=[f"O:{o:,.0f}<br>H:{h:,.0f}<br>L:{l:,.0f}<br>C:{c:,.0f}" for o, h, l, c in zip(df['Open'], df['High'], df['Low'], df['Close'])]
+                    ), row=1, col=1)
+
+        colors = {'MA5': 'orange', 'MA25': 'blue', 'MA75': 'green'}
+        for ma, color in colors.items():
+            if ma in df.columns:
+                fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1), name=ma, hoverinfo='skip'), row=1, col=1)
+
+        vol_colors = ['red' if c >= o else 'green' for c, o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=vol_colors), row=3, col=1)
+
+        # Helper for Date Matching
+        dt_index = pd.to_datetime(df.index)
+        def get_date_str(target_date):
+            if target_date > dt_index[-1]: return None
+            try:
+                idx = dt_index.get_indexer([target_date], method='bfill')[0]
+            except:
+                idx = -1
+            if idx != -1:
+                matched_date = dt_index[idx]
+                if (matched_date - target_date).days <= 10:
+                    return matched_date.strftime('%Y-%m-%d')
+            return None
+
+        if signal_history:
+            sig_dates = []
+            sig_prices = []
+            sig_colors = []
+
+            for s in signal_history:
+                d_str = get_date_str(s['Date'])
+                if d_str:
+                    sig_dates.append(d_str)
+                    # Plot at Trigger Price or High/Low? Trigger is clearer for "Entry Condition"
+                    sig_prices.append(s['Trigger'])
+                    sig_colors.append('yellow')
+
+            if sig_dates:
+                fig.add_trace(go.Scatter(x=sig_dates, y=sig_prices, mode='markers',
+                                        marker=dict(symbol='star', size=10, color='yellow', line=dict(width=1, color='black')),
+                                        name='Signal'), row=1, col=1)
+
+        if trade_history:
+            visible_trades = []
+            for t in trade_history:
+                d_str = get_date_str(t['Date'])
+                if d_str:
+                    visible_trades.append({**t, 'DateStr': d_str})
+
+            buy_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'BUY']
+            buy_prices = [t['Price'] for t in visible_trades if t['Action'] == 'BUY']
+            sell_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'SELL']
+            sell_prices = [t['Price'] for t in visible_trades if t['Action'] == 'SELL']
+            close_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'CLOSE']
+            close_prices = [t['Price'] for t in visible_trades if t['Action'] == 'CLOSE']
+
+            if buy_dates:
+                fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode='markers', marker=dict(symbol='triangle-up', size=12, color='blue', line=dict(width=1, color='black')), name='Buy'), row=1, col=1)
+            if sell_dates:
+                fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode='markers', marker=dict(symbol='triangle-down', size=12, color='blue', line=dict(width=1, color='white')), name='Sell'), row=1, col=1)
+            if close_dates:
+                fig.add_trace(go.Scatter(x=close_dates, y=close_prices, mode='markers', marker=dict(symbol='x', size=8, color='gold', line=dict(width=1, color='black')), name='Close'), row=1, col=1)
+
+        if 'Stoch_K' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='blue', width=1), name='%K'), row=2, col=1)
+        if 'Stoch_D' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='orange', width=1), name='%D'), row=2, col=1)
+        if 'Stoch_SlowD' in df.columns:
+            fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_SlowD'], line=dict(color='green', width=1), name='Slow%D'), row=2, col=1)
+
+        n_candles = len(df.index)
+        for i in range(0, n_candles, 10):
+            x0 = i - 0.5
+            x1 = min(i + 5, n_candles) - 0.5
+            fig.add_vrect(x0=x0, x1=x1, fillcolor="#333333", opacity=0.5, layer="below", line_width=0)
+
+        # Determine initial view ranges (last 40 candles for Manual mode parity)
+        view_len = 40
+        x_start_idx = max(0, n_candles - view_len)
+        x_end_idx = n_candles - 1
+        x_range = [x_start_idx, x_end_idx] if n_candles > 0 else None
+
+        y_range = None
+        if n_candles > 0:
+            view_df = df.iloc[x_start_idx:]
+            y_min = view_df['Low'].min()
+            y_max = view_df['High'].max()
+            # Calculate minimal padding
+            padding = (y_max - y_min) * 0.1 if y_max != y_min else y_max * 0.1
+            y_range = [y_min - padding, y_max + padding]
+
+        fig.update_layout(
+            xaxis_rangeslider_visible=False, 
+            xaxis2_rangeslider_visible=False,
+            xaxis3_rangeslider_visible=True, # Slider only under the 3rd chart (Volume)
+            height=800, 
+            margin=dict(l=0, r=0, t=30, b=0), 
+            template="plotly_dark",
+            dragmode="pan" # Default to drag and pan for trackpads
+        )
+        
+        # Apply strict initial y-axis range to make candlesticks readable
+        fig.update_yaxes(title_text="Price", row=1, col=1, showgrid=True, gridcolor="#444444", fixedrange=False, range=y_range)
+        fig.update_yaxes(title_text="Stoch", range=[0, 100], row=2, col=1, showgrid=True, gridcolor="#444444", fixedrange=False)
+        fig.update_yaxes(title_text="Volume", row=3, col=1, showgrid=True, gridcolor="#444444", fixedrange=False)
+        
+        fig.update_xaxes(showgrid=True, gridcolor="#444444", type='category', tickangle=90, dtick=5, range=x_range)
+        return fig
+
     # Session State Initialization
     if 'simulation_started' not in st.session_state:
         st.session_state.simulation_started = False
@@ -277,12 +402,12 @@ def main():
                 st.session_state.position = 0
                 st.session_state.avg_price = 0
                 st.session_state.pos_start_date = None
-            
+
             holding_days = ""
             if pnl != 0 or "Close" in trade_type or "Cover" in trade_type:
                 if st.session_state.pos_start_date is not None:
                     holding_days = (current_date - st.session_state.pos_start_date).days
-            
+
             if st.session_state.position != 0 and st.session_state.pos_start_date is None:
                 st.session_state.pos_start_date = current_date
 
@@ -299,81 +424,6 @@ def main():
             })
             st.rerun()
 
-        def draw_candlestick(df, title, trade_history=None):
-            # Convert index to string to remove gaps (Category Axis)
-            df = df.copy()
-            df.index = df.index.strftime('%Y-%m-%d')
-
-            fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
-                                vertical_spacing=0.03, subplot_titles=(title, 'Volume', 'Stochastics'),
-                                row_heights=[0.5, 0.2, 0.3])
-
-            fig.add_trace(go.Candlestick(x=df.index,
-                        open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-                        name='Price',
-                        increasing_line_color='red', increasing_fillcolor='red',
-                        decreasing_line_color='green', decreasing_fillcolor='green',
-                        hoverinfo='x+text',
-                        text=[f"O:{o:,.0f}<br>H:{h:,.0f}<br>L:{l:,.0f}<br>C:{c:,.0f}" for o, h, l, c in zip(df['Open'], df['High'], df['Low'], df['Close'])]
-                        ), row=1, col=1)
-
-            colors = {'MA5': 'orange', 'MA25': 'blue', 'MA75': 'green'}
-            for ma, color in colors.items():
-                if ma in df.columns:
-                    fig.add_trace(go.Scatter(x=df.index, y=df[ma], line=dict(color=color, width=1), name=ma, hoverinfo='skip'), row=1, col=1)
-
-            vol_colors = ['red' if c >= o else 'green' for c, o in zip(df['Close'], df['Open'])]
-            fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', marker_color=vol_colors), row=2, col=1)
-
-            if trade_history:
-                dt_index = pd.to_datetime(df.index)
-                visible_trades = []
-                for t in trade_history:
-                    t_date = t['Date']
-                    if t_date > dt_index[-1]: continue
-                    try:
-                        idx = dt_index.get_indexer([t_date], method='bfill')[0]
-                    except:
-                        idx = -1
-                    if idx != -1:
-                        matched_date = dt_index[idx]
-                        if (matched_date - t_date).days <= 10:
-                            date_str = matched_date.strftime('%Y-%m-%d')
-                            visible_trades.append({**t, 'DateStr': date_str})
-
-                buy_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'BUY']
-                buy_prices = [t['Price'] for t in visible_trades if t['Action'] == 'BUY']
-                sell_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'SELL']
-                sell_prices = [t['Price'] for t in visible_trades if t['Action'] == 'SELL']
-                close_dates = [t['DateStr'] for t in visible_trades if t['Action'] == 'CLOSE']
-                close_prices = [t['Price'] for t in visible_trades if t['Action'] == 'CLOSE']
-
-                if buy_dates:
-                    fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode='markers', marker=dict(symbol='triangle-up', size=12, color='blue', line=dict(width=1, color='black')), name='Buy'), row=1, col=1)
-                if sell_dates:
-                    fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode='markers', marker=dict(symbol='triangle-down', size=12, color='blue', line=dict(width=1, color='white')), name='Sell'), row=1, col=1)
-                if close_dates:
-                    fig.add_trace(go.Scatter(x=close_dates, y=close_prices, mode='markers', marker=dict(symbol='x', size=8, color='gold', line=dict(width=1, color='black')), name='Close'), row=1, col=1)
-
-            if 'Stoch_K' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_K'], line=dict(color='blue', width=1), name='%K'), row=3, col=1)
-            if 'Stoch_D' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_D'], line=dict(color='orange', width=1), name='%D'), row=3, col=1)
-            if 'Stoch_SlowD' in df.columns:
-                fig.add_trace(go.Scatter(x=df.index, y=df['Stoch_SlowD'], line=dict(color='green', width=1), name='Slow%D'), row=3, col=1)
-
-            n_candles = len(df.index)
-            for i in range(0, n_candles, 10):
-                x0 = i - 0.5
-                x1 = min(i + 5, n_candles) - 0.5
-                fig.add_vrect(x0=x0, x1=x1, fillcolor="#333333", opacity=0.5, layer="below", line_width=0)
-
-            fig.update_layout(xaxis_rangeslider_visible=False, height=700, margin=dict(l=0, r=0, t=30, b=0), template="plotly_dark",)
-            fig.update_yaxes(title_text="Price", row=1, col=1, showgrid=True, gridcolor="#444444")
-            fig.update_yaxes(title_text="Volume", row=2, col=1, showgrid=True, gridcolor="#444444")
-            fig.update_yaxes(title_text="Stoch", range=[0, 100], row=3, col=1, showgrid=True, gridcolor="#444444")
-            fig.update_xaxes(showgrid=True, gridcolor="#444444", type='category', tickangle=90, dtick=5)
-            return fig
 
         if st.session_state.user_level == 1:
             input_ticker = "7203.T"
@@ -613,8 +663,6 @@ def main():
                          st.error("Data ends before Start Date.")
                     else:
                         # Slice from Start Date (Backtester skips first 20 rows for stabilization)
-                        # To ensure users get trades from their Start Date, we should include a buffer.
-                        # Buffer: 30 days (~20 trading days)
                         buffer_days = 40
                         mask_start = ts_start - pd.Timedelta(days=buffer_days)
 
@@ -624,84 +672,242 @@ def main():
                             st.warning("Not enough data points in the selected range (need at least 20 + buffer).")
                         else:
                             backtester = backtest.StochasticBacktester(initial_balance=bt_balance)
-                            summary, log_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code)
-
-                            # Filter results to show only trades within requested range
-                            if not log_df.empty:
-                                log_df = log_df[log_df['Signal Date'] >= ts_start]
-
-                                # Re-calculate summary for filtered trades
-                                if not log_df.empty:
-                                    wins = log_df[log_df['PnL'] > 0]
-                                    losses = log_df[log_df['PnL'] <= 0]
-                                    total_profit = wins['PnL'].sum()
-                                    total_loss = abs(losses['PnL'].sum())
-                                    net_pnl = total_profit - total_loss
-                                    pf = total_profit / total_loss if total_loss > 0 else float('inf')
-                                    win_rate = (len(wins) / len(log_df)) * 100
-
-                                    n_wins = len(wins)
-                                    n_losses = len(losses)
-                                    avg_profit = total_profit / n_wins if n_wins > 0 else 0
-                                    avg_loss = total_loss / n_losses if n_losses > 0 else 0
-                                    payoff = avg_profit / avg_loss if avg_loss > 0 else float('inf')
-                                    avg_days = log_df['Holding Days'].mean() if len(log_df) > 0 else 0
-
-                                    summary['Total Trades'] = len(log_df)
-                                    summary['Win Rate'] = win_rate
-                                    summary['Total PnL'] = net_pnl
-                                    summary['Profit Factor'] = pf
-                                    summary['Final Balance'] = bt_balance + net_pnl
-                                    summary['Avg Profit'] = avg_profit
-                                    summary['Avg Loss'] = avg_loss
-                                    summary['Payoff Ratio'] = payoff
-                                    summary['Avg Days'] = avg_days
-                                else:
-                                    summary = {"Total Trades": 0, "Win Rate": 0, "Total PnL": 0, "Profit Factor": 0, "Final Balance": bt_balance}
-
-                            # Display Results
-                            st.subheader("Backtest Results")
-
-                            if not log_df.empty:
-                                # 1. Summary Metrics
-                                col1, col2, col3, col4 = st.columns(4)
-                                col1.metric("Total Trades", summary['Total Trades'])
-                                col2.metric("Win Rate", f"{summary['Win Rate']:.1f}%")
-                                col3.metric("Profit Factor", f"{summary['Profit Factor']:.2f}")
-                                col4.metric("Total PnL", f"¥{summary['Total PnL']:,.0f}")
-
-                                col1, col2, col3, col4 = st.columns(4)
-                                col1.metric("Avg Profit", f"¥{summary.get('Avg Profit', 0):,.0f}")
-                                col2.metric("Avg Loss", f"¥{summary.get('Avg Loss', 0):,.0f}")
-                                col3.metric("Payoff Ratio", f"{summary.get('Payoff Ratio', 0):.2f}")
-                                col4.metric("Avg Hold (Days)", f"{summary.get('Avg Days', 0):.1f}")
-
-                                st.metric("Final Balance", f"¥{summary['Final Balance']:,.0f}")
-
-                                # 2. Equity Curve (Realized)
-                                # Construct equity curve from filtered trades
-                                # Base dataframe is df_run filtered by ts_start
-                                df_chart = df_run[df_run.index >= ts_start]
-                                equity_series = pd.Series(index=df_chart.index, data=0.0)
-
-                                # Accumulate PnL by Exit Date
-                                pnl_by_date = log_df.groupby('Exit Date')['PnL'].sum()
-                                pnl_series = pnl_by_date.reindex(df_chart.index, fill_value=0).cumsum()
-                                equity_series = bt_balance + pnl_series
-
-                                st.line_chart(equity_series)
-                                st.caption("Equity Curve (Realized PnL)")
-
-                                # 3. Trade Log
-                                st.dataframe(log_df)
-
-                                csv = log_df.to_csv(index=False).encode('utf-8')
-                                st.download_button("Download CSV", csv, "backtest_results.csv", "text/csv")
-
-                            else:
-                                st.warning("No trades generated in this period.")
+                            summary, log_df, signal_df = backtester.run_backtest(df_run, mode=mode_code, exit_timing=exit_code)
+                            
+                            st.session_state.bt_results = {
+                                'df_run': df_run,
+                                'summary': summary,
+                                'log_df': log_df,
+                                'signal_df': signal_df,
+                                'ts_start': ts_start,
+                                'ts_end': ts_end,
+                                'bt_balance': bt_balance
+                            }
                 else:
                     st.error("Could not fetch data.")
+
+        if 'bt_results' in st.session_state:
+            res = st.session_state.bt_results
+            df_run = res['df_run']
+            log_df = res['log_df']
+            signal_df = res['signal_df']
+            ts_start = res['ts_start']
+            ts_end = res['ts_end']
+            bt_balance = res['bt_balance']
+            backtester = backtest.StochasticBacktester(initial_balance=bt_balance)
+
+
+            # Filter results to show only trades/signals within requested range
+            # Note: summary is initially calculated on df_run, so we must recalculate
+
+            if not signal_df.empty:
+                signal_df = signal_df[signal_df['Date'] >= ts_start]
+
+            if not log_df.empty:
+                log_df = log_df[log_df['Signal Date'] >= ts_start]
+
+            # Re-calculate Summary Stats based on filtered data
+            sig_list = signal_df.to_dict('records') if not signal_df.empty else []
+            trade_list = log_df.to_dict('records') if not log_df.empty else []
+            final_bal = bt_balance + log_df['PnL'].sum() if not log_df.empty else bt_balance
+            summary = backtester._calculate_summary(trade_list, sig_list, final_bal)
+
+            # --- 1. Backtest Analyses (Chart + Equity) ---
+            st.subheader("Backtest Analyses")
+
+            # Chart
+            df_chart = df_run[df_run.index >= ts_start]
+
+            # Pass signals and trades to drawer
+            sig_list = signal_df.to_dict('records') if not signal_df.empty else []
+            trade_list = log_df.to_dict('records') if not log_df.empty else []
+            
+            formatted_trade_list = []
+            for t in trade_list:
+                if t.get('Type') == 'Long':
+                    if 'Entry Date' in t and pd.notna(t['Entry Date']):
+                        formatted_trade_list.append({'Date': t['Entry Date'], 'Action': 'BUY', 'Price': t.get('Entry Price', 0)})
+                    if 'Exit Date' in t and pd.notna(t['Exit Date']):
+                        formatted_trade_list.append({'Date': t['Exit Date'], 'Action': 'CLOSE', 'Price': t.get('Exit Price', 0)})
+                elif t.get('Type') == 'Short':
+                    if 'Entry Date' in t and pd.notna(t['Entry Date']):
+                        formatted_trade_list.append({'Date': t['Entry Date'], 'Action': 'SELL', 'Price': t.get('Entry Price', 0)})
+                    if 'Exit Date' in t and pd.notna(t['Exit Date']):
+                        formatted_trade_list.append({'Date': t['Exit Date'], 'Action': 'CLOSE', 'Price': t.get('Exit Price', 0)})
+
+            fig = draw_candlestick(df_chart, f"Backtest: {bt_ticker}", trade_history=formatted_trade_list, signal_history=sig_list)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Equity Curve
+            if not log_df.empty:
+                equity_series = pd.Series(index=df_chart.index, data=0.0)
+                pnl_by_date = log_df.groupby('Exit Date')['PnL'].sum()
+                pnl_series = pnl_by_date.reindex(df_chart.index, fill_value=0).cumsum()
+                equity_series = bt_balance + pnl_series
+                
+                # Convert to percentage (Initial Balance = 100%)
+                equity_pct = (equity_series / bt_balance) * 100
+                st.line_chart(equity_pct)
+
+            # --- 2. Backtest Results (Detailed Stats) ---
+            st.subheader("Backtest Results")
+            period_str = f"{ts_start.strftime('%Y-%m-%d')} ~ {ts_end.strftime('%Y-%m-%d')}"
+            st.write(f"**Period:** {period_str}")
+            
+            tab_tot, tab_long, tab_short = st.tabs(["Total", "Long", "Short"])
+            
+            def render_stats_tab(stats_dict, bal=None):
+                c1, c2, c3, c4, c5 = st.columns(5)
+                with c1:
+                    st.markdown("**Basic Stats**")
+                    if bal is not None:
+                        st.write(f"Initial: ¥{bt_balance:,.0f}")
+                        st.write(f"Final: ¥{bal:,.0f}")
+                    st.write(f"Total PnL: ¥{stats_dict['Total PnL']:,.0f}")
+                    st.write(f"Max Drawdown: {stats_dict['Max Drawdown %']:.1f}%")
+                    st.write(f"Expected Value: ¥{stats_dict['Expected Value']:,.0f}")
+                    
+                with c2:
+                    st.markdown("**Trade Counts**")
+                    st.write(f"Signals: {stats_dict['Signal Count']}")
+                    st.write(f"Entries: {stats_dict['Entry Count']}")
+                    st.write(f"Entry Rate: {stats_dict['Entry Rate %']:.1f}%")
+                    st.write(f"Max Cons Wins: {stats_dict['Max Cons Wins']}")
+                    st.write(f"Max Cons Loss: {stats_dict['Max Cons Losses']}")
+                    
+                with c3:
+                    st.markdown("**Win Rate Data**")
+                    st.write(f"Win Rate: {stats_dict['Win Rate %']:.1f}%")
+                    n_wins = int(round(stats_dict['Entry Count'] * (stats_dict['Win Rate %'] / 100)))
+                    n_losses = stats_dict['Entry Count'] - n_wins
+                    st.write(f"Wins: {n_wins}")
+                    st.write(f"Losses: {n_losses}")
+                    
+                with c4:
+                    st.markdown("**Risk/Reward**")
+                    st.write(f"Profit Factor: {stats_dict['Profit Factor']:.2f}")
+                    st.write(f"Payoff Ratio: {stats_dict['Payoff Ratio']:.2f}")
+                    st.write(f"Avg Profit: ¥{stats_dict['Avg Profit']:,.0f} ({stats_dict['Avg Profit %']:.2f}%)")
+                    st.write(f"Avg Loss: ¥{stats_dict['Avg Loss']:,.0f} ({stats_dict['Avg Loss %']:.2f}%)")
+                    st.write(f"Max Profit: ¥{stats_dict['Max Profit']:,.0f}")
+                    st.write(f"Max Loss: ¥{stats_dict['Max Loss']:,.0f}")
+                    
+                with c5:
+                    st.markdown("**Holding & Excursion**")
+                    st.write(f"Avg Win Days: {stats_dict['Avg Days (Win)']:,.1f}")
+                    st.write(f"Avg Loss Days: {stats_dict['Avg Days (Loss)']:,.1f}")
+                    st.write(f"Avg MFE: ¥{stats_dict['Avg MFE']:,.0f}")
+                    st.write(f"Avg MAE: ¥{stats_dict['Avg MAE']:,.0f}")
+
+            with tab_tot:
+                render_stats_tab(summary['Total'], summary.get('Final Balance'))
+            with tab_long:
+                render_stats_tab(summary['Long'])
+            with tab_short:
+                render_stats_tab(summary['Short'])
+                
+            st.divider()
+
+            # Trade Log
+            if not log_df.empty:
+                st.markdown("#### Trade Log")
+                log_df_disp = log_df.copy()
+                
+                # Rename columns according to user preference
+                log_df_disp.rename(columns={
+                    'Entry Price': 'Actual Entry Price',
+                    'Stop Trigger': 'Stop Trigger Price',
+                    'Result': 'Results'
+                }, inplace=True)
+                
+                # Format dates and percentages
+                for dcol in ['Signal Date', 'Entry Date', 'Exit Date']:
+                    if dcol in log_df_disp.columns:
+                        log_df_disp[dcol] = log_df_disp[dcol].dt.strftime('%Y-%m-%d')
+                for pcol in ['Risk %', 'PnL %']:
+                    if pcol in log_df_disp.columns:
+                        log_df_disp[pcol] = log_df_disp[pcol].apply(lambda x: f"{x:.2f}%")
+                for currcol in ['Trigger Entry Price', 'Actual Entry Price', 'Stop Trigger Price', 'Risk', 'Exit Price', 'PnL', 'MFE Price', 'MAE Price', 'MFE', 'MAE']:
+                    if currcol in log_df_disp.columns:
+                        log_df_disp[currcol] = log_df_disp[currcol].apply(lambda x: f"¥{x:,.0f}" if pd.notna(x) else "¥0")
+                
+                # Reorder columns to user's specified list
+                user_cols = [
+                    'Trade No', 'Type', 'Signal Date', 'Signal %K Angle', 'Signal %K', 'Signal %D',
+                    'Signal Slow%D', 'Signal RSI', 'Signal SMA5 %', 'Signal SMA25 %', 'Signal ATR',
+                    'Signal Volume Ratio', 'Trigger Entry Price', 'Entry Date', 'Entry Gap %', 'Actual Entry Price',
+                    'Stop Trigger Price', 'Risk', 'Risk %', 'Exit Date', 'Exit Price', 'Exit %K',
+                    'Exit %D', 'Exit Slow%D', 'Exit RSI', 'Exit SMA5 %', 'Exit vs SMA25 %', 'Exit ATR',
+                    'Exit Volume Ratio', 'Exit Reason', 'MFE', 'MFE %', 'MFE RSI', 'MFE %K',
+                    'MFE Volume Ratio', 'MAE', 'MAE %', 'MAE RSI', 'MAE %K', 'MAE Volume Ratio',
+                    'PnL', 'PnL %', 'Holding Days', 'Result'
+                ]
+                
+                # Only select columns that exist to prevent KeyErrors, wait, user requested these so we rename 'Reason' to 'Exit Reason', etc.
+                log_df_disp.rename(columns={'Reason': 'Exit Reason', 'Results': 'Result'}, inplace=True)
+                
+                # Format floats to 2 decimal places except percentages which are already formatted
+                for col in ['Signal %K Angle', 'Signal %K', 'Signal %D', 'Signal Slow%D', 'Signal RSI', 
+                            'Signal SMA5 %', 'Signal SMA25 %', 'Signal ATR', 'Signal Volume Ratio',
+                            'Exit %K', 'Exit %D', 'Exit Slow%D', 'Exit RSI', 'Exit SMA5 %', 'Exit vs SMA25 %',
+                            'Exit ATR', 'Exit Volume Ratio', 'MFE RSI', 'MFE %K', 'MFE Volume Ratio',
+                            'MAE RSI', 'MAE %K', 'MAE Volume Ratio']:
+                    if col in log_df_disp.columns:
+                        log_df_disp[col] = log_df_disp[col].apply(lambda x: f"{x:.2f}" if pd.notna(x) else "")
+                        
+                for pcol in ['Entry Gap %', 'MFE %', 'MAE %']:
+                    if pcol in log_df_disp.columns:
+                        log_df_disp[pcol] = log_df_disp[pcol].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "")
+                
+                final_cols = [c for c in user_cols if c in log_df_disp.columns]
+                st.dataframe(log_df_disp[final_cols], use_container_width=True)
+                
+                csv = log_df.to_csv(index=False).encode('utf-8')
+                st.download_button("Download CSV", csv, "backtest_results.csv", "text/csv", key="download_csv_bt")
+                
+                st.markdown("### Correlation Analysis")
+                st.write("Select two columns from the trade log to analyze their correlation.")
+                
+                # Use log_df for analysis since log_df_disp has strings
+                # Filter only numeric columns
+                numeric_cols = log_df.select_dtypes(include=['number', 'bool']).columns.tolist()
+                
+                # Remove unhelpful columns
+                exclude_cols = ['Trade No']
+                numeric_cols = [c for c in numeric_cols if c not in exclude_cols]
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    x_axis = st.selectbox("X-Axis", numeric_cols, index=0, key="corr_x")
+                with col2:
+                    y_axis = st.selectbox("Y-Axis", numeric_cols, index=min(1, len(numeric_cols)-1), key="corr_y")
+
+                
+                if x_axis and y_axis:
+                    import plotly.express as px
+                    # Drop NA just for these two columns to calculate correlation safely
+                    corr_df = log_df[[x_axis, y_axis]].dropna()
+                    if len(corr_df) > 1:
+                        corr_val = corr_df[x_axis].corr(corr_df[y_axis])
+                        st.write(f"**Correlation Coefficient (Pearson): {corr_val:.3f}**")
+                        
+                        fig_scatter = px.scatter(
+                            log_df, 
+                            x=x_axis, 
+                            y=y_axis, 
+                            hover_name='Trade No' if 'Trade No' in log_df.columns else None,
+                            color='Result' if 'Result' in log_df.columns else None,
+                            title=f"Scatter Plot: {x_axis} vs {y_axis}",
+                            opacity=0.7
+                        )
+                        st.plotly_chart(fig_scatter, use_container_width=True)
+                    else:
+                        st.warning("Not enough valid data points to calculate correlation.")
+            else:
+                st.info("No trades executed.")
+
+        else:
+            st.info("Configure settings and click 'Run Backtest' to start.")
 
 if __name__ == "__main__":
     if st.runtime.exists():
