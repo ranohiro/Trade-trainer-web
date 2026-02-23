@@ -678,8 +678,8 @@ def main():
                          "stop_logic_long": st.session_state.get('stop_logic_long', {}),
                          "entry_logic_short": st.session_state.get('entry_logic_short', {}),
                          "stop_logic_short": st.session_state.get('stop_logic_short', {}),
-                         "maintain_long_rules": [],
-                         "maintain_short_rules": []
+                         "maintain_long_rules": st.session_state.get('maintain_long_rules', []),
+                         "maintain_short_rules": st.session_state.get('maintain_short_rules', [])
                      }
                 else:
                     st.warning("No strategy loaded in Editor. Using Default.")

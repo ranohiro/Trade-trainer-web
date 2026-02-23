@@ -55,6 +55,9 @@ def calculate_indicators(df):
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
+    # Open Gap (%)
+    df['Open_Gap_%'] = ((df['Open'] / df['Close'].shift(1)) - 1) * 100
+
     # SMA Deviations (%)
     df['SMA5_dev'] = (df['Close'] / df['MA5'] - 1) * 100
     df['SMA25_dev'] = (df['Close'] / df['MA25'] - 1) * 100

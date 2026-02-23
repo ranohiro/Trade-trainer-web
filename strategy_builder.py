@@ -12,6 +12,8 @@ DEFAULT_STRATEGY = {
     "memo": "",
     "setup_long_rules": [],
     "setup_short_rules": [],
+    "maintain_long_rules": [],
+    "maintain_short_rules": [],
     "exit_long_rules": [],
     "exit_short_rules": [],
     "entry_logic_long": {"entry_type": "recent_high", "lookback": 5},
@@ -27,6 +29,7 @@ INDICATORS = [
     "RSI",
     "SMA5_dev", "SMA25_dev",
     "ATR", "Volume_Ratio",
+    "Open_Gap_%",
     "dip_formed", "peak_formed"
 ]
 
@@ -100,26 +103,30 @@ def render_strategy_builder():
 
     # --- Strategy Rules UI ---
 
-    col1, col2 = st.columns(2)
+    st.subheader("Setup Rules (Entry Environment)")
+    render_rule_list("setup_long_rules", "Long Setup Rules")
+    render_rule_list("setup_short_rules", "Short Setup Rules")
+    st.divider()
 
-    with col1:
-        st.subheader("Setup Rules (Entry)")
-        render_rule_list("setup_long_rules", "Long Setup Rules")
-        render_rule_list("setup_short_rules", "Short Setup Rules")
+    st.subheader("Maintain Rules (Cancel Conditions)")
+    st.info("💡 If these conditions become False while waiting for an Entry Trigger, the Setup is cancelled. (e.g. to avoid large gaps, add 'Open_Gap_%' < 3.0 here)")
+    render_rule_list("maintain_long_rules", "Long Maintain Rules")
+    render_rule_list("maintain_short_rules", "Short Maintain Rules")
+    st.divider()
 
-        st.subheader("Entry/Stop Logic")
-        st.markdown("**Long Logic**")
-        render_logic_config("entry_logic_long", "Entry")
-        render_logic_config("stop_logic_long", "Stop")
+    st.subheader("Exit Rules")
+    render_rule_list("exit_long_rules", "Long Exit Rules")
+    render_rule_list("exit_short_rules", "Short Exit Rules")
+    st.divider()
 
-    with col2:
-        st.subheader("Exit Rules")
-        render_rule_list("exit_long_rules", "Long Exit Rules")
-        render_rule_list("exit_short_rules", "Short Exit Rules")
+    st.subheader("Entry/Stop Pricing Logic")
+    st.markdown("**Long Logic**")
+    render_logic_config("entry_logic_long", "Entry")
+    render_logic_config("stop_logic_long", "Stop")
 
-        st.markdown("**Short Logic**")
-        render_logic_config("entry_logic_short", "Entry")
-        render_logic_config("stop_logic_short", "Stop")
+    st.markdown("**Short Logic**")
+    render_logic_config("entry_logic_short", "Entry")
+    render_logic_config("stop_logic_short", "Stop")
 
 def render_rule_list(key, title):
     st.markdown(f"**{title}**")
