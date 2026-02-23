@@ -5,7 +5,121 @@ class StochasticBacktester:
     def __init__(self, initial_balance=10000000):
         self.initial_balance = initial_balance
 
-    def run_backtest(self, df, mode="A", exit_timing="Close"):
+    def prepare_data(self, df):
+        """
+        Prepares the DataFrame by adding necessary columns for dynamic rules.
+        """
+        df = df.copy()
+
+        # Shifted columns for slope/prev comparisons
+        # We need these because dynamic rules like "Stoch_D > Stoch_D_prev" refer to them.
+        for col in ['Stoch_K', 'Stoch_D', 'Stoch_SlowD']:
+            if col in df.columns:
+                df[f'{col}_prev'] = df[col].shift(1)
+
+        # Complex conditions: Dip and Peak
+        if 'Stoch_K' in df.columns:
+            prev_k = df['Stoch_K'].shift(1)
+            prev2_k = df['Stoch_K'].shift(2)
+            prev3_k = df['Stoch_K'].shift(3)
+
+            # dip_formed: Current > Prev AND (Prev < Prev2 OR Prev < Prev3)
+            df['dip_formed'] = (df['Stoch_K'] > prev_k) & ((prev_k < prev2_k) | (prev_k < prev3_k))
+
+            # peak_formed: Current < Prev AND (Prev > Prev2 OR Prev > Prev3)
+            df['peak_formed'] = (df['Stoch_K'] < prev_k) & ((prev_k > prev2_k) | (prev_k > prev3_k))
+
+        return df
+
+    def evaluate_rules(self, row, rules):
+        """
+        Evaluates a list of rules against a row.
+        Returns True if ALL rules are met (AND condition).
+        """
+        if not rules:
+            # If no rules provided, return True (pass).
+            # Caller should handle empty/None if they want specific behavior.
+            return True
+
+        for rule in rules:
+            # left: column name
+            left_key = rule.get('left')
+            if left_key not in row:
+                return False
+            left_val = row[left_key]
+
+            # right
+            right_val = None
+            if rule.get('right_type') == 'value':
+                right_val = rule.get('right')
+            elif rule.get('right_type') == 'indicator':
+                right_key = rule.get('right')
+                if right_key not in row:
+                    return False
+                right_val = row[right_key]
+            else:
+                return False
+
+            operator = rule.get('operator')
+
+            try:
+                if operator == '>':
+                    if not (left_val > right_val): return False
+                elif operator == '<':
+                    if not (left_val < right_val): return False
+                elif operator == '>=':
+                    if not (left_val >= right_val): return False
+                elif operator == '<=':
+                    if not (left_val <= right_val): return False
+                elif operator == '==':
+                    if not (left_val == right_val): return False
+                elif operator == '!=':
+                    if not (left_val != right_val): return False
+                else:
+                    return False
+            except:
+                return False
+
+        return True
+
+    def get_default_rules(self):
+        """
+        Returns the hardcoded logic as a dynamic rule set.
+        """
+        # env_long: (stoch_d > stoch_sd) and d_slope_pos and sd_slope_pos
+        env_long_rules = [
+            {"left": "Stoch_D", "operator": ">", "right_type": "indicator", "right": "Stoch_SlowD"},
+            {"left": "Stoch_D", "operator": ">", "right_type": "indicator", "right": "Stoch_D_prev"},
+            {"left": "Stoch_SlowD", "operator": ">", "right_type": "indicator", "right": "Stoch_SlowD_prev"}
+        ]
+
+        # env_short: (stoch_d < stoch_sd) and d_slope_neg and sd_slope_neg
+        env_short_rules = [
+            {"left": "Stoch_D", "operator": "<", "right_type": "indicator", "right": "Stoch_SlowD"},
+            {"left": "Stoch_D", "operator": "<", "right_type": "indicator", "right": "Stoch_D_prev"},
+            {"left": "Stoch_SlowD", "operator": "<", "right_type": "indicator", "right": "Stoch_SlowD_prev"}
+        ]
+
+        return {
+            "setup_long_rules": env_long_rules + [
+                {"left": "dip_formed", "operator": "==", "right_type": "value", "right": True}
+            ],
+            "setup_short_rules": env_short_rules + [
+                {"left": "peak_formed", "operator": "==", "right_type": "value", "right": True}
+            ],
+            # Rules to maintain the setup state (Environment Check)
+            "maintain_long_rules": env_long_rules,
+            "maintain_short_rules": env_short_rules,
+
+            "exit_long_rules": [
+                {"left": "Stoch_D", "operator": "<", "right_type": "indicator", "right": "Stoch_SlowD"}
+            ],
+            "exit_short_rules": [
+                {"left": "Stoch_D", "operator": ">", "right_type": "indicator", "right": "Stoch_SlowD"}
+            ]
+        }
+
+    def run_backtest(self, df, mode="A", exit_timing="Close", rules=None):
         """
         Runs the backtest logic based on the provided dataframe and parameters.
 
@@ -14,6 +128,7 @@ class StochasticBacktester:
               The index should be Datetime or convertible to it.
         - mode: "A" (Touch/Intraday) or "B" (Close/Next Open) for Entry/Stop execution.
         - exit_timing: "Close" (Same day close) or "Open" (Next day open) for Signal Exit (Stoch Cross).
+        - rules: JSON-like dictionary defining the entry/exit rules. If None, uses default hardcoded logic.
 
         Returns:
         - summary: Dictionary with performance metrics.
@@ -29,6 +144,13 @@ class StochasticBacktester:
         for col in required_cols:
             if col not in df.columns:
                 raise ValueError(f"Missing required column: {col}")
+
+        # Use default rules if none provided
+        if rules is None:
+            rules = self.get_default_rules()
+
+        # Pre-calculate dynamic columns (dip, peak, prev, etc.)
+        df = self.prepare_data(df)
 
         # Initialize State
         balance = self.initial_balance
@@ -250,9 +372,13 @@ class StochasticBacktester:
                 if not trade_closed and not pending_action:
                     signal_exit = False
                     if is_long:
-                        if row['Stoch_D'] < row['Stoch_SlowD']: signal_exit = True
+                        exit_rules = rules.get('exit_long_rules', [])
+                        if exit_rules and self.evaluate_rules(row, exit_rules):
+                            signal_exit = True
                     else:
-                        if row['Stoch_D'] > row['Stoch_SlowD']: signal_exit = True
+                        exit_rules = rules.get('exit_short_rules', [])
+                        if exit_rules and self.evaluate_rules(row, exit_rules):
+                            signal_exit = True
 
                     if signal_exit:
                         if exit_timing == "Close":
@@ -265,40 +391,21 @@ class StochasticBacktester:
                             pending_action = {'type': 'Exit', 'reason': "Signal Exit (Next Open)"}
 
             # --- 3. Setup & Entry Logic ---
-            stoch_d = row['Stoch_D']
-            stoch_sd = row['Stoch_SlowD']
-            prev_d = prev['Stoch_D']
-            prev_sd = prev['Stoch_SlowD']
-
-            d_slope_pos = stoch_d > prev_d
-            sd_slope_pos = stoch_sd > prev_sd
-            d_slope_neg = stoch_d < prev_d
-            sd_slope_neg = stoch_sd < prev_sd
-
-            env_long = (stoch_d > stoch_sd) and d_slope_pos and sd_slope_pos
-            env_short = (stoch_d < stoch_sd) and d_slope_neg and sd_slope_neg
-
-            stoch_k = row['Stoch_K']
-            prev_k = prev['Stoch_K']
-            prev2_k = prev2['Stoch_K']
-            prev3_k = prev3['Stoch_K']
-
-            dip_formed = (stoch_k > prev_k) and (prev_k < prev2_k or prev_k < prev3_k)
-            peak_formed = (stoch_k < prev_k) and (prev_k > prev2_k or prev_k > prev3_k)
-
             new_setup = None
-            if env_long and dip_formed:
+
+            # Evaluate Long Setup
+            long_rules = rules.get('setup_long_rules', [])
+            if long_rules and self.evaluate_rules(row, long_rules):
                 new_setup = 'Long'
-                # Entry line: Max High of the past 5 days (including signal day)
                 trig_entry = df['High'].iloc[i-4:i+1].max()
-                # Stop loss line: Signal day's Low
                 trig_stop = low_p
-            elif env_short and peak_formed:
-                new_setup = 'Short'
-                # Entry line: Min Low of the past 5 days (including signal day)
-                trig_entry = df['Low'].iloc[i-4:i+1].min()
-                # Stop loss line: Signal day's High
-                trig_stop = high_p
+            # Evaluate Short Setup
+            else:
+                short_rules = rules.get('setup_short_rules', [])
+                if short_rules and self.evaluate_rules(row, short_rules):
+                    new_setup = 'Short'
+                    trig_entry = df['Low'].iloc[i-4:i+1].min()
+                    trig_stop = high_p
 
             if new_setup:
                 signal_props = {
@@ -427,9 +534,13 @@ class StochasticBacktester:
                 if not triggered and setup_state:
                     is_valid_env = False
                     if setup_state == 'Long':
-                        if env_long: is_valid_env = True
+                        maintain_rules = rules.get('maintain_long_rules', [])
+                        if not maintain_rules or self.evaluate_rules(row, maintain_rules):
+                             is_valid_env = True
                     elif setup_state == 'Short':
-                        if env_short: is_valid_env = True
+                        maintain_rules = rules.get('maintain_short_rules', [])
+                        if not maintain_rules or self.evaluate_rules(row, maintain_rules):
+                            is_valid_env = True
 
                     if not is_valid_env:
                         setup_state = None
@@ -539,14 +650,19 @@ class StochasticBacktester:
                 drawdown = (equity_curve - peak) / peak
                 max_dd = drawdown.min() * 100
 
+            avg_risk_win = wins['Risk'].mean() if n_wins > 0 and 'Risk' in wins.columns else 0.0
+            avg_risk_loss = losses['Risk'].mean() if n_losses > 0 and 'Risk' in losses.columns else 0.0
+
             return {
                 'Signal Count': sig_count, 'Entry Count': n_trades, 'Entry Rate %': entry_rate,
-                'Win Rate %': win_rate, 'Avg Profit': avg_profit, 'Avg Profit %': avg_profit_pct,
+                'Win Rate %': win_rate, 'Win Count': n_wins, 'Loss Count': n_losses,
+                'Avg Profit': avg_profit, 'Avg Profit %': avg_profit_pct,
                 'Avg Loss': avg_loss, 'Avg Loss %': avg_loss_pct, 'Max Profit': max_profit, 'Max Loss': max_loss,
                 'Profit Factor': pf, 'Payoff Ratio': payoff_ratio, 'Expected Value': expected_val,
                 'Avg Days (Win)': avg_days_win, 'Avg Days (Loss)': avg_days_loss,
                 'Max Cons Wins': max_cons_wins, 'Max Cons Losses': max_cons_losses,
-                'Avg MFE': avg_mfe, 'Avg MAE': avg_mae, 'Total PnL': total_pnl, 'Max Drawdown %': max_dd
+                'Avg MFE': avg_mfe, 'Avg MAE': avg_mae, 'Total PnL': total_pnl, 'Max Drawdown %': max_dd,
+                'Avg Risk (Win)': avg_risk_win, 'Avg Risk (Loss)': avg_risk_loss
             }
 
         df_log = pd.DataFrame(history)
