@@ -187,7 +187,7 @@ def main():
             height=800, 
             margin=dict(l=0, r=0, t=30, b=0), 
             template="plotly_dark",
-            dragmode="pan" # Default to drag and pan for trackpads
+            dragmode="zoom" # Default to box zoom for easier selecting
         )
         
         # Apply strict initial y-axis range to make candlesticks readable
@@ -549,15 +549,15 @@ def main():
                 with tabs[0]:
                     display_df = df_slice.tail(30)
                     fig = draw_candlestick(display_df, f"Daily: {input_ticker}", st.session_state.trade_history)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
                 if "Weekly" in tab_names:
                     with tabs[tab_names.index("Weekly")]:
                         if df_w_slice is not None:
-                            st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly", st.session_state.trade_history), use_container_width=True)
+                            st.plotly_chart(draw_candlestick(df_w_slice.tail(50), "Weekly", st.session_state.trade_history), use_container_width=True, config={'scrollZoom': True})
                 if "Index" in tab_names:
                     with tabs[tab_names.index("Index")]:
                         if df_i_slice is not None:
-                            st.plotly_chart(draw_candlestick(df_i_slice.tail(30), f"Index: {input_index}"), use_container_width=True)
+                            st.plotly_chart(draw_candlestick(df_i_slice.tail(30), f"Index: {input_index}"), use_container_width=True, config={'scrollZoom': True})
                 with tabs[-1]:
                     st.subheader("Asset Transition")
                     if st.session_state.equity_history:
@@ -784,7 +784,7 @@ def main():
                         formatted_trade_list.append({'Date': t['Exit Date'], 'Action': 'CLOSE', 'Price': t.get('Exit Price', 0)})
 
             fig = draw_candlestick(df_chart, f"Backtest: {bt_ticker}", trade_history=formatted_trade_list, signal_history=sig_list)
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
             # Equity Curve
             if not log_df.empty:
