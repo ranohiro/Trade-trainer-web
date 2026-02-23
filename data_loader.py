@@ -1,5 +1,6 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 
 def fetch_data(ticker, period="10y", interval="1d"):
     """
@@ -39,12 +40,36 @@ def calculate_indicators(df):
     
     # Fast %K
     df['Stoch_K'] = 100 * ((df['Close'] - low_min) / (high_max - low_min))
+    df['Stoch_K_Angle'] = df['Stoch_K'].diff()
     
     # %D (SMA of %K, window=5)
     df['Stoch_D'] = df['Stoch_K'].rolling(window=5).mean()
     
     # Slow %D (SMA of %D, window=4)
     df['Stoch_SlowD'] = df['Stoch_D'].rolling(window=4).mean()
+
+    # RSI (14-day)
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    # SMA Deviations (%)
+    df['SMA5_dev'] = (df['Close'] / df['MA5'] - 1) * 100
+    df['SMA25_dev'] = (df['Close'] / df['MA25'] - 1) * 100
+
+    # ATR (14-day)
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['ATR'] = true_range.rolling(14).mean()
+
+    # Volume Ratio (Current vs 20-day MA)
+    df['Volume_MA20'] = df['Volume'].rolling(window=20).mean()
+    df['Volume_Ratio'] = df['Volume'] / df['Volume_MA20']
 
     return df
 
